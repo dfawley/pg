@@ -50,9 +50,10 @@ async fn main() {
     }
 
     {
-        let f1 = client.unary_call(proto!(MyRequest { query: 3 }).as_view());
+        let req = proto!(MyRequest { query: 3 });
+        let f1 = client.unary_call(req.as_view());
         let f2 = client
-            .unary_call(MyRequestView::default())
+            .unary_call(req.as_view())
             .with_timeout(Duration::from_secs(2));
         let (a, b) = tokio::join!(f1, f2);
         println!("5: {:?}, {:?}", a.unwrap(), b.unwrap());
