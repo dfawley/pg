@@ -35,8 +35,8 @@ impl MyServiceClientStub {
 impl MyServiceClientStub {
     pub fn unary_call<'stub: 'call, 'call>(
         &'stub self,
-        req: impl AsView<Proxied = MyRequest>, // MyRequestView<'call>,
+        req: MyRequestView<'call>,
     ) -> UnaryCall<'call, MyRequestView<'call>, MyResponse, MyResponseMut<'call>> {
-        UnaryCall::new(&self.channel, req.as_view())
+        UnaryCall::new(&self.channel, req)
     }
 }

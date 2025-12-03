@@ -16,14 +16,16 @@ async fn main() {
     let channel = Channel::default();
     let client = MyServiceClientStub::new(channel.clone());
     {
-        let res = client.unary_call(proto!(MyRequest { query: 3 })).await;
+        let res = client
+            .unary_call(proto!(MyRequest { query: 3 }).as_view())
+            .await;
         println!("1: {:?}", res.unwrap());
     }
 
     {
         let mut resp = MyResponse::default();
         let status = client
-            .unary_call(MyRequest::default())
+            .unary_call(MyRequestView::default())
             .with_response_message(&mut resp.as_mut())
             .await;
         println!("2: {:?} / {:?}", resp, status);
@@ -31,7 +33,7 @@ async fn main() {
 
     {
         let res = client
-            .unary_call(MyRequest::default())
+            .unary_call(MyRequestView::default())
             .with_timeout(Duration::from_secs(2))
             .await;
         println!("3: {:?}", res.unwrap());
@@ -40,7 +42,7 @@ async fn main() {
     {
         let mut resp = MyResponse::default();
         let status = client
-            .unary_call(MyRequest::default())
+            .unary_call(MyRequestView::default())
             .with_timeout(Duration::from_secs(2))
             .with_response_message(&mut resp.as_mut())
             .await;
@@ -48,9 +50,9 @@ async fn main() {
     }
 
     {
-        let f1 = client.unary_call(MyRequest::default());
+        let f1 = client.unary_call(proto!(MyRequest { query: 3 }).as_view());
         let f2 = client
-            .unary_call(MyRequest::default())
+            .unary_call(MyRequestView::default())
             .with_timeout(Duration::from_secs(2));
         let (a, b) = tokio::join!(f1, f2);
         println!("5: {:?}, {:?}", a.unwrap(), b.unwrap());
