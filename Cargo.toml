@@ -1,0 +1,14 @@
+[package]
+name = "pg"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+futures-core = "0.3.31"
+futures-util = "0.3.31"
+protobuf = "4.33.0-release"
+tokio = { version = "1.48.0", features = ["full"] }
+tokio-macros = "2.6.0"
+
+[build-dependencies]
+protobuf-codegen = "4.33.0-release"

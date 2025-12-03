@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package my_package;
+
+service MyService {
+  rpc UnaryCall (MyRequest) returns (MyResponse);
+  rpc StreamingCall (stream MyRequest) returns (stream MyResponse);
+}
+
+message MyRequest {
+  int32 query = 1;
+}
+
+message MyResponse {
+  int32 result = 1;
+}
