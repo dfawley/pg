@@ -4,7 +4,7 @@ pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/protobuf_generated/generated.rs"));
 }
 use pb::*;
-use protobuf::{AsView, IntoView, Proxied};
+use protobuf::AsView;
 
 pub struct MyServiceClientStub {
     channel: Channel,
@@ -33,10 +33,13 @@ impl MyServiceClientStub {
 }
 
 impl MyServiceClientStub {
-    pub fn unary_call<'stub: 'call, 'call>(
+    pub fn unary_call<'stub: 'call, 'call, R>(
         &'stub self,
-        req: MyRequestView<'call>,
-    ) -> UnaryCall<'call, MyRequestView<'call>, MyResponse, MyResponseMut<'call>> {
+        req: R,
+    ) -> UnaryCall<'call, R, MyResponse, MyResponseMut<'call>>
+    where
+        R: AsView<Proxied = MyRequest> + Send + 'call,
+    {
         UnaryCall::new(&self.channel, req)
     }
 }

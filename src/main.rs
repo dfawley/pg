@@ -4,6 +4,7 @@ pub trait Incable {
 
 mod gencode;
 mod grpc;
+mod grpc_protobuf;
 
 use gencode::MyServiceClientStub;
 use gencode::pb::*;
@@ -50,10 +51,9 @@ async fn main() {
     }
 
     {
-        let req = proto!(MyRequest { query: 3 });
-        let f1 = client.unary_call(req.as_view());
+        let f1 = client.unary_call(proto!(MyRequest { query: 3 }));
         let f2 = client
-            .unary_call(req.as_view())
+            .unary_call(proto!(MyRequest { query: 3 }))
             .with_timeout(Duration::from_secs(2));
         let (a, b) = tokio::join!(f1, f2);
         println!("5: {:?}, {:?}", a.unwrap(), b.unwrap());
