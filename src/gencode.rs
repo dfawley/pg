@@ -1,4 +1,5 @@
-use crate::grpc::{Channel, UnaryCall};
+use crate::grpc::Channel;
+use crate::grpc_protobuf::UnaryCall;
 
 pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/protobuf_generated/generated.rs"));
@@ -38,8 +39,19 @@ impl MyServiceClientStub {
         req: R,
     ) -> UnaryCall<'call, R, MyResponse, MyResponseMut<'call>>
     where
-        R: AsView<Proxied = MyRequest> + Send + 'call,
+        R: AsView<Proxied = MyRequest> + Send + Sync + 'call,
     {
         UnaryCall::new(&self.channel, req)
     }
+    /*
+        pub fn streaming_call<'stub: 'call, 'call, R>(
+            &'stub self,
+            req_stream: R,
+        ) -> BidiCall<'call, R, MyResponse>
+        where
+            R: Stream<Item = MyRequest> + Send + 'call,
+        {
+            BidiCall::new(&self.channel, req_stream)
+        }
+    */
 }

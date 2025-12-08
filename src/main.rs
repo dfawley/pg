@@ -8,7 +8,8 @@ mod grpc_protobuf;
 
 use gencode::MyServiceClientStub;
 use gencode::pb::*;
-use grpc::{Channel, SharedCall};
+use grpc::Channel;
+use grpc_protobuf::SharedCall;
 use protobuf::proto;
 use std::time::Duration;
 
