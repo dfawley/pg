@@ -1,3 +1,5 @@
+use async_stream::stream;
+use futures_core::Stream;
 use futures_util::stream::once;
 use protobuf::AsView;
 use std::pin::Pin;
@@ -43,7 +45,9 @@ where
             .channel
             .call(once(async { self.req.as_view() }), &self.args)
             .await;
-        stream.next_msg(res).await
+        // TODO: cardinality violation checks.
+        stream.next_msg(res).await;
+        stream.status().await
     }
 }
 
@@ -75,17 +79,18 @@ where
                 .await;
 
             let mut res = Res::default();
-            let status = stream.next_msg(&mut res).await;
-
+            // TODO: cardinality violation checks.
+            stream.next_msg(&mut res).await;
+            let status = stream.status().await;
             if status.code != 0 {
-                return Err(status);
+                Err(status)
+            } else {
+                Ok(res)
             }
-            Ok(res)
         })
     }
 }
 
-/*
 pub struct BidiCall<'a, Req, Res> {
     channel: &'a Channel,
     req: Req,
@@ -95,7 +100,6 @@ pub struct BidiCall<'a, Req, Res> {
 
 impl<'a, Req, Res> BidiCall<'a, Req, Res>
 where
-    Req: RequestMessage + 'a,
     Res: Default + Send,
 {
     pub fn new(channel: &'a Channel, req: Req) -> Self {
@@ -111,7 +115,7 @@ where
 impl<'a, Req, Res> private::Sealed for BidiCall<'a, Req, Res> {}
 
 impl<'a, Req, Res> SharedCall for BidiCall<'a, Req, Res> {
-    fn with_timeout(mut self, t: time::Duration) -> Self {
+    fn with_timeout(mut self, t: Duration) -> Self {
         self.args.timeout = t;
         self
     }
@@ -119,10 +123,10 @@ impl<'a, Req, Res> SharedCall for BidiCall<'a, Req, Res> {
 
 impl<'a, Req, Res> IntoFuture for BidiCall<'a, Req, Res>
 where
-    Res: Sync + Send + Debug + Default + 'a,
-    Req: RequestMessage + 'a,
+    Res: Sync + Send + Debug + Default + 'static,
+    Req: Send + Sync + 'a,
 {
-    type Output = Result<Res, Status>;
+    type Output = Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send>>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
@@ -132,16 +136,20 @@ where
             // 3. The stream consumes that view.
             let stream = self
                 .channel
-                .call(once(async { self.req.as_view() }), &self.args);
+                .call(once(async { self.req }), &self.args)
+                .await;
 
-            let mut res = Res::default();
-            let status = stream.next_msg(&mut res).await;
-
-            if status.code != 0 {
-                return Err(status);
-            }
-            Ok(res)
+            Box::pin(stream! {
+                loop {
+                    let mut res = Res::default();
+                    if stream.next_msg(&mut res).await {
+                        yield Ok(res);
+                    } else {
+                        yield Err(stream.status().await);
+                        return;
+                    }
+                }
+            }) as Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send>>
         })
     }
 }
-*/

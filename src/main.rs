@@ -1,11 +1,11 @@
-pub trait Incable {
-    fn inc(&mut self);
-}
+#![allow(unused)]
 
 mod gencode;
 mod grpc;
 mod grpc_protobuf;
 
+use async_stream::stream;
+use futures_util::StreamExt;
 use gencode::MyServiceClientStub;
 use gencode::pb::*;
 use grpc::Channel;
@@ -17,14 +17,32 @@ use std::time::Duration;
 async fn main() {
     let channel = Channel::default();
     let client = MyServiceClientStub::new(channel.clone());
+    unary(client.clone()).await;
+    bidi(client).await;
+}
+
+async fn bidi(client: MyServiceClientStub) {
     {
-        let res = client
-            .unary_call(proto!(MyRequest { query: 3 }).as_view())
-            .await;
+        let requests = stream! {
+            yield proto!(MyRequest { query: 1 });
+            yield proto!(MyRequest { query: 2 });
+        };
+        let mut res = client.streaming_call(requests).await;
+        while let Some(res) = res.next().await {
+            println!("stream: {:?}", res);
+        }
+    }
+}
+
+async fn unary(client: MyServiceClientStub) {
+    {
+        // Using an owned message for request and response:
+        let res = client.unary_call(proto!(MyRequest { query: 3 })).await;
         println!("1: {:?}", res.unwrap());
     }
 
     {
+        // Using a view for the request and response:
         let mut resp = MyResponse::default();
         let status = client
             .unary_call(MyRequestView::default())
@@ -34,6 +52,7 @@ async fn main() {
     }
 
     {
+        // Owned response with timeout:
         let res = client
             .unary_call(MyRequestView::default())
             .with_timeout(Duration::from_secs(2))
@@ -42,6 +61,7 @@ async fn main() {
     }
 
     {
+        // View response with timeout:
         let mut resp = MyResponse::default();
         let status = client
             .unary_call(MyRequestView::default())
@@ -52,6 +72,7 @@ async fn main() {
     }
 
     {
+        // Two calls joined:
         let f1 = client.unary_call(proto!(MyRequest { query: 3 }));
         let f2 = client
             .unary_call(proto!(MyRequest { query: 3 }))

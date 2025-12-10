@@ -8,7 +8,6 @@ use futures_core::Stream;
 use crate::gencode::pb::*;
 
 #[derive(Clone, Debug)]
-#[allow(unused)]
 pub struct Status {
     pub code: i32,
     pub msg: String,
@@ -53,11 +52,18 @@ pub struct RecvStream<T> {
 }
 
 impl<T> RecvStream<T> {
-    pub async fn next_msg(&self, msg: &mut T) -> Status {
+    pub async fn next_msg(&self, msg: &mut T) -> bool {
         let mut cnt = self.cnt.lock().unwrap();
         let msg: &mut MyResponseMut = unsafe { &mut *(msg as *mut T as *mut MyResponseMut) };
+        if *cnt == 3 {
+            return false;
+        }
         *cnt += 1;
         msg.set_result(*cnt);
+        true
+    }
+
+    pub async fn status(self) -> Status /* Should have all RPC trailers/etc */ {
         Status::ok()
     }
 }

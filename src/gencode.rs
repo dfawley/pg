@@ -1,12 +1,14 @@
 use crate::grpc::Channel;
-use crate::grpc_protobuf::UnaryCall;
+use crate::grpc_protobuf::{BidiCall, UnaryCall};
 
 pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/protobuf_generated/generated.rs"));
 }
+use futures_core::Stream;
 use pb::*;
 use protobuf::AsView;
 
+#[derive(Clone)]
 pub struct MyServiceClientStub {
     channel: Channel,
 }
@@ -43,15 +45,14 @@ impl MyServiceClientStub {
     {
         UnaryCall::new(&self.channel, req)
     }
-    /*
-        pub fn streaming_call<'stub: 'call, 'call, R>(
-            &'stub self,
-            req_stream: R,
-        ) -> BidiCall<'call, R, MyResponse>
-        where
-            R: Stream<Item = MyRequest> + Send + 'call,
-        {
-            BidiCall::new(&self.channel, req_stream)
-        }
-    */
+
+    pub fn streaming_call<'stub: 'call, 'call, R>(
+        &'stub self,
+        req_stream: R,
+    ) -> BidiCall<'call, R, MyResponse>
+    where
+        R: Stream<Item = MyRequest /*View<'call>*/> + Send + 'call,
+    {
+        BidiCall::new(&self.channel, req_stream)
+    }
 }
