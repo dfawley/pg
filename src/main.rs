@@ -23,10 +23,10 @@ async fn main() {
 
 async fn bidi(client: MyServiceClientStub) {
     {
-        let requests = stream! {
+        let requests = Box::pin(stream! {
             yield proto!(MyRequest { query: 1 });
             yield proto!(MyRequest { query: 2 });
-        };
+        });
         let mut res = client.streaming_call(requests).await;
         while let Some(res) = res.next().await {
             println!("stream: {:?}", res);

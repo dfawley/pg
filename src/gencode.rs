@@ -46,12 +46,12 @@ impl MyServiceClientStub {
         UnaryCall::new(&self.channel, req)
     }
 
-    pub fn streaming_call<'stub: 'call, 'call, R>(
+    pub fn streaming_call<'stub: 'call, 'call, ReqStream>(
         &'stub self,
-        req_stream: R,
-    ) -> BidiCall<'call, R, MyResponse>
+        req_stream: ReqStream,
+    ) -> BidiCall<'call, ReqStream, MyResponse>
     where
-        R: Stream<Item = MyRequest /*View<'call>*/> + Send + 'call,
+        ReqStream: Unpin + Stream<Item = MyRequest /*View<'call>*/> + Send + 'static,
     {
         BidiCall::new(&self.channel, req_stream)
     }
