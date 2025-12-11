@@ -1,12 +1,12 @@
-use crate::grpc::Channel;
-use crate::grpc_protobuf::{BidiCall, UnaryCall};
+use crate::grpc::{Channel, MethodDescriptor, MethodType};
+use crate::grpc_protobuf::{ProtoDecoder, ProtoEncoder, UnaryCall};
 
 pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/protobuf_generated/generated.rs"));
 }
 use futures_core::Stream;
 use pb::*;
-use protobuf::AsView;
+use protobuf::{AsMut, AsView};
 
 #[derive(Clone)]
 pub struct MyServiceClientStub {
@@ -35,24 +35,34 @@ impl MyServiceClientStub {
     }
 }
 
+static DESC: MethodDescriptor<ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>> =
+    MethodDescriptor {
+        method_name: "unary_call",
+        message_encoder: ProtoEncoder::new(),
+        message_decoder: ProtoDecoder::new(),
+        method_type: MethodType::Unary,
+    };
+
 impl MyServiceClientStub {
     pub fn unary_call<'stub: 'call, 'call, R>(
         &'stub self,
         req: R,
-    ) -> UnaryCall<'call, R, MyResponse, MyResponseMut<'call>>
+    ) -> UnaryCall<'call, ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>, R>
     where
         R: AsView<Proxied = MyRequest> + Send + Sync + 'call,
     {
-        UnaryCall::new(&self.channel, req)
+        UnaryCall::new(&self.channel, &DESC, req)
     }
 
-    pub fn streaming_call<'stub: 'call, 'call, ReqStream>(
-        &'stub self,
-        req_stream: ReqStream,
-    ) -> BidiCall<'call, ReqStream, MyResponse>
-    where
-        ReqStream: Unpin + Stream<Item = MyRequest /*View<'call>*/> + Send + 'static,
-    {
-        BidiCall::new(&self.channel, req_stream)
-    }
+    /*
+        pub fn streaming_call<'stub: 'call, 'call, ReqStream>(
+            &'stub self,
+            req_stream: ReqStream,
+        ) -> BidiCall<'call, ReqStream, MyResponse>
+        where
+            ReqStream: Unpin + Stream<Item = MyRequest /*View<'call>*/> + Send + 'static,
+        {
+            BidiCall::new(&self.channel, req_stream)
+        }
+    */
 }

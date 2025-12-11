@@ -27,10 +27,50 @@ pub struct Channel {
     pub _code: Arc<i32>,
 }
 
+pub enum MethodType {
+    Unary,
+    ClientStream,
+    ServerStream,
+    BidiStream,
+}
+
+/*pub trait Callable: Send + Sync {
+    fn call<Req, Res>(
+        &self,
+        _descriptor: &MethodDescriptor<Req, Res>,
+        _args: &Args,
+    ) -> impl std::future::Future<Output = (SendStream<Req>, RecvStream<Res>)> + Send;
+}*/
+
+pub trait Encoder: Send + Sync {
+    type Message: Send + Sync + 'static; //: ?Sized;
+    type View<'a>: Send + Sync; //: ?Sized;
+
+    fn encode<'a>(&self, item: &Self::View<'a>) -> Vec<Vec<u8>>; // TODO: error
+}
+
+pub trait Decoder: Send + Sync {
+    type Message: Send + Sync + 'static; //: ?Sized;
+    type MutView<'a>: Send + Sync; //: ?Sized;
+
+    fn decode<'a>(&self, data: &[&[u8]], item: &mut Self::MutView<'a>); // TODO: error
+}
+
+pub struct MethodDescriptor<'a, Sender, Receiver> {
+    pub method_name: &'a str,
+    pub message_encoder: Sender,
+    pub message_decoder: Receiver,
+    pub method_type: MethodType,
+}
+
 impl Channel {
-    pub async fn call<Req, Res>(&self, _args: &Args) -> (SendStream<Req>, RecvStream<Res>) {
+    pub async fn call<'call, Sender: Encoder, Receiver: Decoder>(
+        &self,
+        _descriptor: &MethodDescriptor<'call, Sender, Receiver>,
+        _args: &Args,
+    ) -> (SendStream<Sender>, RecvStream<Receiver>) {
         (
-            SendStream { _d: PhantomData },
+            SendStream(PhantomData),
             RecvStream {
                 _d: PhantomData,
                 cnt: Mutex::new(0),
@@ -47,20 +87,18 @@ pub struct Args {
 /// SendStream represents the sending side of a client stream.  Dropping the
 /// SendStream or calling send_final_message results in a signal the server can
 /// use to determine the client is done sending.
-pub struct SendStream<T> {
-    _d: PhantomData<T>,
-}
+pub struct SendStream<T>(PhantomData<T>);
 
-impl<T> SendStream<T> {
+impl<T: Encoder> SendStream<T> {
     /// Sends msg on the stream.  If false is returned, the message could not be
     /// delivered because the stream was closed.  Future calls to SendStream
     /// will do nothing.
-    pub async fn send_msg(&self, msg: T) -> bool {
+    pub async fn send_msg(&self, msg: &T::View<'_>) -> bool {
         true // false on error sending
     }
     /// Sends msg on the stream and indicates the client has no further messages
     /// to send.
-    pub async fn send_final_msg(self, msg: T) {
+    pub async fn send_final_msg(self, msg: &T::View<'_>) {
         // Error doesn't matter when sending final message.
     }
 }
@@ -74,13 +112,14 @@ pub struct RecvStream<T> {
     _d: PhantomData<T>,
 }
 
-impl<T> RecvStream<T> {
+impl<T: Decoder> RecvStream<T> {
     /// Receives the next message on the stream into msg.  If false is returned,
     /// msg is unmodified, the stream has finished, and trailers should be
     /// called to receive the trailers from the stream.
-    pub async fn next_msg(&self, msg: &mut T) -> bool {
+    pub async fn next_msg(&self, msg: &mut T::MutView<'_>) -> bool {
         let mut cnt = self.cnt.lock().unwrap();
-        let msg: &mut MyResponseMut = unsafe { &mut *(msg as *mut T as *mut MyResponseMut) };
+        let msg: &mut MyResponseMut =
+            unsafe { &mut *(msg as *mut T::MutView<'_> as *mut MyResponseMut) };
         if *cnt == 3 {
             return false;
         }

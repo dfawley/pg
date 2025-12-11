@@ -22,6 +22,7 @@ async fn main() {
 }
 
 async fn bidi(client: MyServiceClientStub) {
+    /*
     {
         let requests = Box::pin(stream! {
             yield proto!(MyRequest { query: 1 });
@@ -32,6 +33,7 @@ async fn bidi(client: MyServiceClientStub) {
             println!("stream: {:?}", res);
         }
     }
+    */
 }
 
 async fn unary(client: MyServiceClientStub) {
@@ -46,7 +48,7 @@ async fn unary(client: MyServiceClientStub) {
         let mut resp = MyResponse::default();
         let status = client
             .unary_call(MyRequestView::default())
-            .with_response_message(&mut resp.as_mut())
+            .with_response_message(&mut resp)
             .await;
         println!("2: {:?} / {:?}", resp, status);
     }
