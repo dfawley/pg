@@ -13,6 +13,8 @@ use grpc_protobuf::SharedCall;
 use protobuf::proto;
 use std::time::Duration;
 
+use crate::grpc::Callable;
+
 #[tokio::main]
 async fn main() {
     let channel = Channel::default();
@@ -21,8 +23,7 @@ async fn main() {
     bidi(client).await;
 }
 
-async fn bidi(client: MyServiceClientStub) {
-    /*
+async fn bidi<C: Callable>(client: MyServiceClientStub<C>) {
     {
         let requests = Box::pin(stream! {
             yield proto!(MyRequest { query: 1 });
@@ -33,10 +34,9 @@ async fn bidi(client: MyServiceClientStub) {
             println!("stream: {:?}", res);
         }
     }
-    */
 }
 
-async fn unary(client: MyServiceClientStub) {
+async fn unary<C: Callable>(client: MyServiceClientStub<C>) {
     {
         // Using an owned message for request and response:
         let res = client.unary_call(proto!(MyRequest { query: 3 })).await;

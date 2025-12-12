@@ -1,5 +1,5 @@
-use crate::grpc::{Channel, MethodDescriptor, MethodType};
-use crate::grpc_protobuf::{ProtoDecoder, ProtoEncoder, UnaryCall};
+use crate::grpc::{Callable, Channel, MethodDescriptor, MethodType};
+use crate::grpc_protobuf::{BidiCall, ProtoDecoder, ProtoEncoder, UnaryCall};
 
 pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/protobuf_generated/generated.rs"));
@@ -9,8 +9,8 @@ use pb::*;
 use protobuf::{AsMut, AsView};
 
 #[derive(Clone)]
-pub struct MyServiceClientStub {
-    channel: Channel,
+pub struct MyServiceClientStub<C> {
+    channel: C,
 }
 
 /* pub trait MyServiceClient {
@@ -29,8 +29,8 @@ pub struct MyServiceClientStub {
 
  */
 
-impl MyServiceClientStub {
-    pub fn new(channel: Channel) -> Self {
+impl<C> MyServiceClientStub<C> {
+    pub fn new(channel: C) -> Self {
         Self { channel }
     }
 }
@@ -43,26 +43,32 @@ static DESC: MethodDescriptor<ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>>
         method_type: MethodType::Unary,
     };
 
-impl MyServiceClientStub {
+static STR_DESC: MethodDescriptor<ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>> =
+    MethodDescriptor {
+        method_name: "streaming_call",
+        message_encoder: ProtoEncoder::new(),
+        message_decoder: ProtoDecoder::new(),
+        method_type: MethodType::BidiStream,
+    };
+
+impl<C: Callable> MyServiceClientStub<C> {
     pub fn unary_call<'stub: 'call, 'call, R>(
         &'stub self,
         req: R,
-    ) -> UnaryCall<'call, ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>, R>
+    ) -> UnaryCall<'call, C, ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>, R>
     where
         R: AsView<Proxied = MyRequest> + Send + Sync + 'call,
     {
         UnaryCall::new(&self.channel, &DESC, req)
     }
 
-    /*
-        pub fn streaming_call<'stub: 'call, 'call, ReqStream>(
-            &'stub self,
-            req_stream: ReqStream,
-        ) -> BidiCall<'call, ReqStream, MyResponse>
-        where
-            ReqStream: Unpin + Stream<Item = MyRequest /*View<'call>*/> + Send + 'static,
-        {
-            BidiCall::new(&self.channel, req_stream)
-        }
-    */
+    pub fn streaming_call<'stub: 'call, 'call, ReqStream>(
+        &'stub self,
+        req_stream: ReqStream,
+    ) -> BidiCall<'call, C, ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>, ReqStream>
+    where
+        ReqStream: Unpin + Stream<Item = MyRequest /*View<'call>*/> + Send + 'static,
+    {
+        BidiCall::new(&self.channel, &STR_DESC, req_stream)
+    }
 }

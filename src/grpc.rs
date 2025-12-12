@@ -34,14 +34,6 @@ pub enum MethodType {
     BidiStream,
 }
 
-/*pub trait Callable: Send + Sync {
-    fn call<Req, Res>(
-        &self,
-        _descriptor: &MethodDescriptor<Req, Res>,
-        _args: &Args,
-    ) -> impl std::future::Future<Output = (SendStream<Req>, RecvStream<Res>)> + Send;
-}*/
-
 pub trait Encoder: Send + Sync {
     type Message: Send + Sync + 'static; //: ?Sized;
     type View<'a>: Send + Sync; //: ?Sized;
@@ -63,19 +55,27 @@ pub struct MethodDescriptor<'a, Sender, Receiver> {
     pub method_type: MethodType,
 }
 
-impl Channel {
-    pub async fn call<'call, Sender: Encoder, Receiver: Decoder>(
+pub trait Callable: Send + Sync {
+    fn call<'call, Sender: Encoder, Receiver: Decoder>(
+        &self,
+        descriptor: &MethodDescriptor<'call, Sender, Receiver>,
+        args: &Args,
+    ) -> impl std::future::Future<Output = (SendStream<Sender>, RecvStream<Receiver>)> + Send;
+}
+
+impl Callable for Channel {
+    fn call<'call, Sender: Encoder, Receiver: Decoder>(
         &self,
         _descriptor: &MethodDescriptor<'call, Sender, Receiver>,
         _args: &Args,
-    ) -> (SendStream<Sender>, RecvStream<Receiver>) {
-        (
+    ) -> impl std::future::Future<Output = (SendStream<Sender>, RecvStream<Receiver>)> + Send {
+        std::future::ready((
             SendStream(PhantomData),
             RecvStream {
                 _d: PhantomData,
                 cnt: Mutex::new(0),
             },
-        )
+        ))
     }
 }
 

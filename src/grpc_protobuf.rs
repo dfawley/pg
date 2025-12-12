@@ -8,30 +8,30 @@ use std::time::Duration;
 use std::{fmt::Debug, marker::PhantomData};
 use tokio::task;
 
-use crate::grpc::{Args, Channel, Decoder, Encoder, MethodDescriptor, Status};
+use crate::grpc::{Args, Callable, Channel, Decoder, Encoder, MethodDescriptor, Status};
 
 mod private {
     pub(crate) trait Sealed {}
 }
 
-pub struct UnaryCall<'a, Enc: Encoder, Dec: Decoder, Req = <Enc as Encoder>::View<'a>>
+pub struct UnaryCall<'a, C, Enc: Encoder, Dec: Decoder, Req = <Enc as Encoder>::View<'a>>
 where
     Req: AsView<Proxied = Enc::Message>,
 {
-    channel: &'a Channel,
+    channel: &'a C,
     desc: &'a MethodDescriptor<'a, Enc, Dec>,
     req: Req,
     args: Args,
 }
 
-impl<'a, Enc, Dec, Req> UnaryCall<'a, Enc, Dec, Req>
+impl<'a, C: Callable, Enc, Dec, Req> UnaryCall<'a, C, Enc, Dec, Req>
 where
     Enc: Encoder,
     Dec: Decoder,
     Req: AsView<Proxied = Enc::Message>,
     for<'b> Enc::Message: Proxied<View<'b> = Enc::View<'b>>,
 {
-    pub fn new(channel: &'a Channel, desc: &'a MethodDescriptor<Enc, Dec>, req: Req) -> Self {
+    pub fn new(channel: &'a C, desc: &'a MethodDescriptor<Enc, Dec>, req: Req) -> Self {
         Self {
             channel,
             req,
@@ -43,7 +43,6 @@ where
     pub async fn with_response_message<Msg>(self, res: &mut Msg) -> Status
     where
         Msg: AsMut<MutProxied = Dec::Message>,
-        Dec::Message: MutProxied + 'static,
         for<'b> Dec::Message: MutProxied<Mut<'b> = Dec::MutView<'b>>,
     {
         let (tx, rx) = self.channel.call(self.desc, &self.args).await;
@@ -53,7 +52,7 @@ where
     }
 }
 
-impl<'a, Enc, Dec, Req> IntoFuture for UnaryCall<'a, Enc, Dec, Req>
+impl<'a, C: Callable, Enc, Dec, Req> IntoFuture for UnaryCall<'a, C, Enc, Dec, Req>
 where
     Enc: Encoder,
     Dec: Decoder,
@@ -77,6 +76,76 @@ where
             } else {
                 Ok(res)
             }
+        })
+    }
+}
+
+pub struct BidiCall<'a, C, Enc: Encoder, Dec: Decoder, Req = <Enc as Encoder>::View<'a>>
+where
+    Req: Unpin + Stream + Send + 'static,
+    Req::Item: Sync + Send + AsView + 'static,
+{
+    channel: &'a C,
+    desc: &'a MethodDescriptor<'a, Enc, Dec>,
+    req: Req,
+    args: Args,
+}
+
+impl<'a, C, Enc, Dec, Req> BidiCall<'a, C, Enc, Dec, Req>
+where
+    Enc: Encoder,
+    Dec: Decoder,
+    Req: Unpin + Stream + Send + 'static,
+    Req::Item: Sync + Send + AsView + 'a,
+    for<'b> Enc::Message: Proxied<View<'b> = Enc::View<'b>>,
+{
+    pub fn new(channel: &'a C, desc: &'a MethodDescriptor<Enc, Dec>, req: Req) -> Self {
+        Self {
+            channel,
+            req,
+            desc,
+            args: Default::default(),
+        }
+    }
+}
+
+impl<'a, C: Callable, Enc, Dec, Req> IntoFuture for BidiCall<'a, C, Enc, Dec, Req>
+where
+    Enc: Encoder + 'static,
+    Dec: Decoder + 'static,
+    Req: Unpin + Stream + Send + 'static,
+    Req::Item: Sync + Send + AsView<Proxied = Enc::Message> + 'a,
+    for<'b> Enc::Message: Proxied<View<'b> = Enc::View<'b>>,
+    for<'b> Dec::Message: MutProxied<Mut<'b> = Dec::MutView<'b>> + Default,
+{
+    type Output = Pin<Box<dyn Stream<Item = Result<Dec::Message, Status>> + Send>>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+
+    fn into_future(mut self) -> Self::IntoFuture {
+        Box::pin(async move {
+            // 1. self is moved into this async block (owning the request data).
+            // 2. self.req.as_view() creates a view pointing to that data.
+            // 3. The stream consumes that view.
+            let (tx, rx) = self.channel.call(self.desc, &self.args).await;
+
+            task::spawn(async move {
+                while let Some(req) = self.req.next().await {
+                    if !tx.send_msg(&req.as_view()).await {
+                        return;
+                    }
+                }
+            });
+            Box::pin(stream! {
+                loop {
+                    let mut res = Dec::Message::default();
+                    if rx.next_msg(&mut res.as_mut()).await {
+                        yield Ok(res);
+                    } else {
+                        yield Err(rx.trailers().await);
+                        return;
+                    }
+                }
+            }) as Pin<Box<dyn Stream<Item = Result<Dec::Message, Status>> + Send>>
         })
     }
 }
@@ -146,25 +215,34 @@ pub trait CallArgs: private::Sealed {
     fn args_mut(&mut self) -> &mut Args;
 }
 
-impl<'a, Enc: Encoder, Dec: Decoder, Req> private::Sealed for UnaryCall<'a, Enc, Dec, Req> where
+impl<'a, C, Enc: Encoder, Dec: Decoder, Req> private::Sealed for UnaryCall<'a, C, Enc, Dec, Req> where
     Req: AsView<Proxied = Enc::Message>
 {
 }
-impl<'a, Enc: Encoder, Dec: Decoder, Req: AsView<Proxied = Enc::Message>> CallArgs
-    for UnaryCall<'a, Enc, Dec, Req>
+impl<'a, C, Enc: Encoder, Dec: Decoder, Req: AsView<Proxied = Enc::Message>> CallArgs
+    for UnaryCall<'a, C, Enc, Dec, Req>
 {
     fn args_mut(&mut self) -> &mut Args {
         &mut self.args
     }
 }
-/*
-impl<'a, Req, Res> private::Sealed for BidiCall<'a, Req, Res> {}
-impl<'a, Req, Res> CallArgs for BidiCall<'a, Req, Res> {
+
+impl<'a, C, Enc: Encoder, Dec: Decoder, Req> private::Sealed for BidiCall<'a, C, Enc, Dec, Req>
+where
+    Req: Unpin + Stream + Send + 'static,
+    Req::Item: Sync + Send + AsView + 'static,
+{
+}
+impl<'a, C, Enc: Encoder, Dec: Decoder, Req> CallArgs for BidiCall<'a, C, Enc, Dec, Req>
+where
+    Req: Unpin + Stream + Send + 'static,
+    Req::Item: Sync + Send + AsView + 'static,
+{
     fn args_mut(&mut self) -> &mut Args {
         &mut self.args
     }
 }
-*/
+
 pub trait SharedCall: private::Sealed {
     fn with_timeout(self, timeout: Duration) -> Self;
 }
