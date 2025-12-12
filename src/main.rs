@@ -20,7 +20,8 @@ async fn main() {
     let channel = Channel::default();
     let client = MyServiceClientStub::new(channel.clone());
     unary(client.clone()).await;
-    bidi(client).await;
+    bidi(client.clone()).await;
+    // let (tx, rx) = channel.call(desc, args).await;
 }
 
 async fn bidi<C: Callable>(client: MyServiceClientStub<C>) {

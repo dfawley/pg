@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use crate::grpc::{Callable, Channel, MethodDescriptor, MethodType};
 use crate::grpc_protobuf::{BidiCall, ProtoDecoder, ProtoEncoder, UnaryCall};
 
@@ -35,21 +37,23 @@ impl<C> MyServiceClientStub<C> {
     }
 }
 
-static DESC: MethodDescriptor<ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>> =
-    MethodDescriptor {
-        method_name: "unary_call",
-        message_encoder: ProtoEncoder::new(),
-        message_decoder: ProtoDecoder::new(),
-        method_type: MethodType::Unary,
-    };
+static UNARY_CALL_DESC: LazyLock<
+    MethodDescriptor<ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>>,
+> = LazyLock::new(|| MethodDescriptor {
+    method_name: "unary_call".to_string(),
+    message_encoder: ProtoEncoder::new(),
+    message_decoder: ProtoDecoder::new(),
+    method_type: MethodType::Unary,
+});
 
-static STR_DESC: MethodDescriptor<ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>> =
-    MethodDescriptor {
-        method_name: "streaming_call",
-        message_encoder: ProtoEncoder::new(),
-        message_decoder: ProtoDecoder::new(),
-        method_type: MethodType::BidiStream,
-    };
+static STREAMING_CALL_DESC: LazyLock<
+    MethodDescriptor<ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>>,
+> = LazyLock::new(|| MethodDescriptor {
+    method_name: "streaming_call".to_string(),
+    message_encoder: ProtoEncoder::new(),
+    message_decoder: ProtoDecoder::new(),
+    method_type: MethodType::BidiStream,
+});
 
 impl<C: Callable> MyServiceClientStub<C> {
     pub fn unary_call<'stub: 'call, 'call, R>(
@@ -59,7 +63,7 @@ impl<C: Callable> MyServiceClientStub<C> {
     where
         R: AsView<Proxied = MyRequest> + Send + Sync + 'call,
     {
-        UnaryCall::new(&self.channel, &DESC, req)
+        UnaryCall::new(&self.channel, &UNARY_CALL_DESC, req)
     }
 
     pub fn streaming_call<'stub: 'call, 'call, ReqStream>(
@@ -67,8 +71,8 @@ impl<C: Callable> MyServiceClientStub<C> {
         req_stream: ReqStream,
     ) -> BidiCall<'call, C, ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>, ReqStream>
     where
-        ReqStream: Unpin + Stream<Item = MyRequest /*View<'call>*/> + Send + 'static,
+        ReqStream: Unpin + Stream<Item = MyRequest> + Send + 'static,
     {
-        BidiCall::new(&self.channel, &STR_DESC, req_stream)
+        BidiCall::new(&self.channel, &STREAMING_CALL_DESC, req_stream)
     }
 }

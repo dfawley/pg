@@ -27,6 +27,7 @@ pub struct Channel {
     pub _code: Arc<i32>,
 }
 
+#[derive(Debug)]
 pub enum MethodType {
     Unary,
     ClientStream,
@@ -35,40 +36,44 @@ pub enum MethodType {
 }
 
 pub trait Encoder: Send + Sync {
-    type Message: Send + Sync + 'static; //: ?Sized;
-    type View<'a>: Send + Sync; //: ?Sized;
+    type Message: Send + Sync + 'static;
+    type View<'a>: Send + Sync;
 
-    fn encode<'a>(&self, item: &Self::View<'a>) -> Vec<Vec<u8>>; // TODO: error
+    fn encode<'a>(&self, item: &Self::View<'a>) -> Vec<Vec<u8>>;
 }
 
 pub trait Decoder: Send + Sync {
-    type Message: Send + Sync + 'static; //: ?Sized;
-    type MutView<'a>: Send + Sync; //: ?Sized;
+    type Message: Send + Sync + 'static;
+    type MutView<'a>: Send + Sync;
 
-    fn decode<'a>(&self, data: &[&[u8]], item: &mut Self::MutView<'a>); // TODO: error
+    fn decode<'a>(&self, data: &[&[u8]], item: &mut Self::MutView<'a>);
 }
 
-pub struct MethodDescriptor<'a, Sender, Receiver> {
-    pub method_name: &'a str,
+pub struct MethodDescriptor<Sender, Receiver> {
+    pub method_name: String,
     pub message_encoder: Sender,
     pub message_decoder: Receiver,
     pub method_type: MethodType,
 }
 
 pub trait Callable: Send + Sync {
-    fn call<'call, Sender: Encoder, Receiver: Decoder>(
+    fn call<Sender: Encoder, Receiver: Decoder>(
         &self,
-        descriptor: &MethodDescriptor<'call, Sender, Receiver>,
+        descriptor: &MethodDescriptor<Sender, Receiver>,
         args: &Args,
     ) -> impl std::future::Future<Output = (SendStream<Sender>, RecvStream<Receiver>)> + Send;
 }
 
 impl Callable for Channel {
-    fn call<'call, Sender: Encoder, Receiver: Decoder>(
+    fn call<Sender: Encoder, Receiver: Decoder>(
         &self,
-        _descriptor: &MethodDescriptor<'call, Sender, Receiver>,
+        descriptor: &MethodDescriptor<Sender, Receiver>,
         _args: &Args,
     ) -> impl std::future::Future<Output = (SendStream<Sender>, RecvStream<Receiver>)> + Send {
+        println!(
+            "starting call for {:?} ({:?})",
+            descriptor.method_name, descriptor.method_type
+        );
         std::future::ready((
             SendStream(PhantomData),
             RecvStream {

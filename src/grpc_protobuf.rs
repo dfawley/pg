@@ -2,7 +2,7 @@ use async_stream::stream;
 use futures_core::Stream;
 use futures_util::StreamExt;
 use futures_util::stream::once;
-use protobuf::{AsMut, AsView, ClearAndParse, Message, MutProxied, Proxied, Serialize};
+use protobuf::{AsMut, AsView, ClearAndParse, Message, MessageMut, MutProxied, Proxied, Serialize};
 use std::pin::Pin;
 use std::time::Duration;
 use std::{fmt::Debug, marker::PhantomData};
@@ -19,7 +19,7 @@ where
     Req: AsView<Proxied = Enc::Message>,
 {
     channel: &'a C,
-    desc: &'a MethodDescriptor<'a, Enc, Dec>,
+    desc: &'a MethodDescriptor<Enc, Dec>,
     req: Req,
     args: Args,
 }
@@ -86,7 +86,7 @@ where
     Req::Item: Sync + Send + AsView + 'static,
 {
     channel: &'a C,
-    desc: &'a MethodDescriptor<'a, Enc, Dec>,
+    desc: &'a MethodDescriptor<Enc, Dec>,
     req: Req,
     args: Args,
 }
@@ -264,7 +264,7 @@ impl<M> ProtoEncoder<M> {
 
 impl<M> Encoder for ProtoEncoder<M>
 where
-    M: Proxied + Send + Sync + 'static,
+    M: Message + 'static,
     for<'a> M::View<'a>: Send + Serialize,
 {
     type Message = M;
@@ -285,13 +285,13 @@ impl<M> ProtoDecoder<M> {
 
 impl<M> Decoder for ProtoDecoder<M>
 where
-    M: MutProxied + Send + Sync + 'static,
+    M: Message + 'static,
     for<'a> M::Mut<'a>: Send + ClearAndParse,
 {
     type Message = M;
     type MutView<'a> = M::Mut<'a>;
 
     fn decode<'a>(&self, data: &[&[u8]], item: &mut Self::MutView<'a>) {
-        item.clear_and_parse(&data[0]).unwrap();
+        item.clear_and_parse(data[0]).unwrap();
     }
 }
