@@ -14,24 +14,29 @@ mod private {
     pub(crate) trait Sealed {}
 }
 
-pub struct UnaryCall<'a, C, Enc: Encoder, Dec: Decoder, Req = <Enc as Encoder>::View<'a>>
+pub struct UnaryCall<'a, C, ReqMsg, ResMsg, Req = <ProtoEncoder<ReqMsg> as Encoder>::View<'a>>
 where
-    Req: AsView<Proxied = Enc::Message>,
+    ReqMsg: Message,
+    ResMsg: Message,
+    Req: AsView<Proxied = ReqMsg>,
 {
     channel: &'a C,
-    desc: &'a MethodDescriptor<Enc, Dec>,
+    desc: &'a MethodDescriptor<ProtoEncoder<ReqMsg>, ProtoDecoder<ResMsg>>,
     req: Req,
     args: Args,
 }
 
-impl<'a, C: Callable, Enc, Dec, Req> UnaryCall<'a, C, Enc, Dec, Req>
+impl<'a, C: Callable, ReqMsg, ResMsg, Req> UnaryCall<'a, C, ReqMsg, ResMsg, Req>
 where
-    Enc: Encoder,
-    Dec: Decoder,
-    Req: AsView<Proxied = Enc::Message>,
-    for<'b> Enc::Message: Proxied<View<'b> = Enc::View<'b>>,
+    ReqMsg: Message + 'static,
+    ResMsg: Message + 'static,
+    Req: AsView<Proxied = ReqMsg>,
 {
-    pub fn new(channel: &'a C, desc: &'a MethodDescriptor<Enc, Dec>, req: Req) -> Self {
+    pub fn new(
+        channel: &'a C,
+        desc: &'a MethodDescriptor<ProtoEncoder<ReqMsg>, ProtoDecoder<ResMsg>>,
+        req: Req,
+    ) -> Self {
         Self {
             channel,
             req,
@@ -42,8 +47,8 @@ where
 
     pub async fn with_response_message<Msg>(self, res: &mut Msg) -> Status
     where
-        Msg: AsMut<MutProxied = Dec::Message>,
-        for<'b> Dec::Message: MutProxied<Mut<'b> = Dec::MutView<'b>>,
+        Msg: AsMut<MutProxied = ResMsg>,
+        for<'b> ResMsg: MutProxied<Mut<'b> = <ProtoDecoder<ResMsg> as Decoder>::MutView<'b>>,
     {
         let (tx, rx) = self.channel.call(self.desc, &self.args).await;
         tx.send_final_msg(&self.req.as_view()).await;
@@ -52,15 +57,15 @@ where
     }
 }
 
-impl<'a, C: Callable, Enc, Dec, Req> IntoFuture for UnaryCall<'a, C, Enc, Dec, Req>
+impl<'a, C: Callable, ReqMsg, ResMsg, Req> IntoFuture for UnaryCall<'a, C, ReqMsg, ResMsg, Req>
 where
-    Enc: Encoder,
-    Dec: Decoder,
-    Req: AsView<Proxied = Enc::Message> + Send + 'a,
-    for<'b> Enc::Message: Proxied<View<'b> = Enc::View<'b>>,
-    for<'b> Dec::Message: MutProxied<Mut<'b> = Dec::MutView<'b>> + Default,
+    ReqMsg: Message + 'static,
+    ResMsg: Message + Default + 'static,
+    Req: AsView<Proxied = ReqMsg> + Send + 'a,
+    for<'b> ReqMsg: Proxied<View<'b> = <ProtoEncoder<ReqMsg> as Encoder>::View<'b>>,
+    for<'b> ResMsg: MutProxied<Mut<'b> = <ProtoDecoder<ResMsg> as Decoder>::MutView<'b>>,
 {
-    type Output = Result<Dec::Message, Status>;
+    type Output = Result<ResMsg, Status>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
@@ -68,7 +73,7 @@ where
             let (tx, rx) = self.channel.call(self.desc, &self.args).await;
 
             tx.send_final_msg(&self.req.as_view()).await;
-            let mut res = Dec::Message::default();
+            let mut res = ResMsg::default();
             rx.next_msg(&mut res.as_mut()).await;
             let status = rx.trailers().await;
             if status.code != 0 {
@@ -80,26 +85,31 @@ where
     }
 }
 
-pub struct BidiCall<'a, C, Enc: Encoder, Dec: Decoder, Req = <Enc as Encoder>::View<'a>>
+pub struct BidiCall<'a, C, ReqMsg, ResMsg, ReqStream>
 where
-    Req: Unpin + Stream + Send + 'static,
-    Req::Item: Sync + Send + AsView + 'static,
+    ReqMsg: Message,
+    ResMsg: Message,
+    ReqStream: Unpin + Stream + Send + 'static,
+    ReqStream::Item: Sync + Send + AsView<Proxied = ReqMsg> + 'static,
 {
     channel: &'a C,
-    desc: &'a MethodDescriptor<Enc, Dec>,
-    req: Req,
+    desc: &'a MethodDescriptor<ProtoEncoder<ReqMsg>, ProtoDecoder<ResMsg>>,
+    req: ReqStream,
     args: Args,
 }
 
-impl<'a, C, Enc, Dec, Req> BidiCall<'a, C, Enc, Dec, Req>
+impl<'a, C, ReqMsg, ResMsg, ReqStream> BidiCall<'a, C, ReqMsg, ResMsg, ReqStream>
 where
-    Enc: Encoder,
-    Dec: Decoder,
-    Req: Unpin + Stream + Send + 'static,
-    Req::Item: Sync + Send + AsView + 'a,
-    for<'b> Enc::Message: Proxied<View<'b> = Enc::View<'b>>,
+    ReqMsg: Message + 'static,
+    ResMsg: Message + 'static,
+    ReqStream: Unpin + Stream + Send + 'static,
+    ReqStream::Item: Sync + Send + AsView<Proxied = ReqMsg> + 'a,
 {
-    pub fn new(channel: &'a C, desc: &'a MethodDescriptor<Enc, Dec>, req: Req) -> Self {
+    pub fn new(
+        channel: &'a C,
+        desc: &'a MethodDescriptor<ProtoEncoder<ReqMsg>, ProtoDecoder<ResMsg>>,
+        req: ReqStream,
+    ) -> Self {
         Self {
             channel,
             req,
@@ -109,16 +119,17 @@ where
     }
 }
 
-impl<'a, C: Callable, Enc, Dec, Req> IntoFuture for BidiCall<'a, C, Enc, Dec, Req>
+impl<'a, C: Callable, ReqMsg, ResMsg, ReqStream> IntoFuture
+    for BidiCall<'a, C, ReqMsg, ResMsg, ReqStream>
 where
-    Enc: Encoder + 'static,
-    Dec: Decoder + 'static,
-    Req: Unpin + Stream + Send + 'static,
-    Req::Item: Sync + Send + AsView<Proxied = Enc::Message> + 'a,
-    for<'b> Enc::Message: Proxied<View<'b> = Enc::View<'b>>,
-    for<'b> Dec::Message: MutProxied<Mut<'b> = Dec::MutView<'b>> + Default,
+    ReqMsg: Message + 'static,
+    ResMsg: Message + Default + 'static,
+    ReqStream: Unpin + Stream + Send + 'static,
+    ReqStream::Item: Sync + Send + AsView<Proxied = ReqMsg> + 'a,
+    for<'b> ReqMsg: Proxied<View<'b> = <ProtoEncoder<ReqMsg> as Encoder>::View<'b>>,
+    for<'b> ResMsg: MutProxied<Mut<'b> = <ProtoDecoder<ResMsg> as Decoder>::MutView<'b>>,
 {
-    type Output = Pin<Box<dyn Stream<Item = Result<Dec::Message, Status>> + Send>>;
+    type Output = Pin<Box<dyn Stream<Item = Result<ResMsg, Status>> + Send>>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(mut self) -> Self::IntoFuture {
@@ -137,7 +148,7 @@ where
             });
             Box::pin(stream! {
                 loop {
-                    let mut res = Dec::Message::default();
+                    let mut res = ResMsg::default();
                     if rx.next_msg(&mut res.as_mut()).await {
                         yield Ok(res);
                     } else {
@@ -145,7 +156,7 @@ where
                         return;
                     }
                 }
-            }) as Pin<Box<dyn Stream<Item = Result<Dec::Message, Status>> + Send>>
+            }) as Pin<Box<dyn Stream<Item = Result<ResMsg, Status>> + Send>>
         })
     }
 }
@@ -215,28 +226,39 @@ pub trait CallArgs: private::Sealed {
     fn args_mut(&mut self) -> &mut Args;
 }
 
-impl<'a, C, Enc: Encoder, Dec: Decoder, Req> private::Sealed for UnaryCall<'a, C, Enc, Dec, Req> where
-    Req: AsView<Proxied = Enc::Message>
+impl<'a, C, ReqMsg, ResMsg, Req> private::Sealed for UnaryCall<'a, C, ReqMsg, ResMsg, Req>
+where
+    ReqMsg: Message,
+    ResMsg: Message,
+    Req: AsView<Proxied = ReqMsg>,
 {
 }
-impl<'a, C, Enc: Encoder, Dec: Decoder, Req: AsView<Proxied = Enc::Message>> CallArgs
-    for UnaryCall<'a, C, Enc, Dec, Req>
+impl<'a, C, ReqMsg, ResMsg, Req> CallArgs for UnaryCall<'a, C, ReqMsg, ResMsg, Req>
+where
+    ReqMsg: Message,
+    ResMsg: Message,
+    Req: AsView<Proxied = ReqMsg>,
 {
     fn args_mut(&mut self) -> &mut Args {
         &mut self.args
     }
 }
 
-impl<'a, C, Enc: Encoder, Dec: Decoder, Req> private::Sealed for BidiCall<'a, C, Enc, Dec, Req>
+impl<'a, C, ReqMsg, ResMsg, ReqStream> private::Sealed
+    for BidiCall<'a, C, ReqMsg, ResMsg, ReqStream>
 where
-    Req: Unpin + Stream + Send + 'static,
-    Req::Item: Sync + Send + AsView + 'static,
+    ReqMsg: Message,
+    ResMsg: Message,
+    ReqStream: Unpin + Stream + Send + 'static,
+    ReqStream::Item: Sync + Send + AsView<Proxied = ReqMsg> + 'static,
 {
 }
-impl<'a, C, Enc: Encoder, Dec: Decoder, Req> CallArgs for BidiCall<'a, C, Enc, Dec, Req>
+impl<'a, C, ReqMsg, ResMsg, ReqStream> CallArgs for BidiCall<'a, C, ReqMsg, ResMsg, ReqStream>
 where
-    Req: Unpin + Stream + Send + 'static,
-    Req::Item: Sync + Send + AsView + 'static,
+    ReqMsg: Message,
+    ResMsg: Message,
+    ReqStream: Unpin + Stream + Send + 'static,
+    ReqStream::Item: Sync + Send + AsView<Proxied = ReqMsg> + 'static,
 {
     fn args_mut(&mut self) -> &mut Args {
         &mut self.args

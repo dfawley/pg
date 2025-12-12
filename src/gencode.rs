@@ -59,19 +59,19 @@ impl<C: Callable> MyServiceClientStub<C> {
     pub fn unary_call<'stub: 'call, 'call, R>(
         &'stub self,
         req: R,
-    ) -> UnaryCall<'call, C, ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>, R>
+    ) -> UnaryCall<'call, C, MyRequest, MyResponse, R>
     where
         R: AsView<Proxied = MyRequest> + Send + Sync + 'call,
     {
         UnaryCall::new(&self.channel, &UNARY_CALL_DESC, req)
     }
 
-    pub fn streaming_call<'stub: 'call, 'call, ReqStream>(
+    pub fn streaming_call<'stub: 'call, 'call, S>(
         &'stub self,
-        req_stream: ReqStream,
-    ) -> BidiCall<'call, C, ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>, ReqStream>
+        req_stream: S,
+    ) -> BidiCall<'call, C, MyRequest, MyResponse, S>
     where
-        ReqStream: Unpin + Stream<Item = MyRequest> + Send + 'static,
+        S: Unpin + Stream<Item = MyRequest> + Send + 'static,
     {
         BidiCall::new(&self.channel, &STREAMING_CALL_DESC, req_stream)
     }
