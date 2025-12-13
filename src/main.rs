@@ -25,7 +25,7 @@ async fn main() {
 }
 
 async fn bidi<C: Callable>(client: MyServiceClientStub<C>) {
-    /*    {
+    {
         let requests = Box::pin(stream! {
             yield proto!(MyRequest { query: 1 });
             yield proto!(MyRequest { query: 2 });
@@ -34,7 +34,7 @@ async fn bidi<C: Callable>(client: MyServiceClientStub<C>) {
         while let Some(res) = res.next().await {
             println!("stream: {:?}", res);
         }
-    }*/
+    }
 }
 
 async fn unary<C: Callable>(client: MyServiceClientStub<C>) {

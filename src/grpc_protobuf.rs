@@ -80,6 +80,75 @@ where
         })
     }
 }
+
+pub struct BidiCall<'a, C, ReqStream: Stream, Res> {
+    channel: &'a C,
+    desc: &'a MethodDescriptor<ProtoEncoder<ReqStream::Item>, ProtoDecoder<Res>>,
+    req_stream: ReqStream,
+    args: Args,
+}
+
+impl<'a, C, ReqStream: Stream, Res> BidiCall<'a, C, ReqStream, Res>
+where
+    ReqStream: Unpin + Stream + Send + 'static,
+    ReqStream::Item: Sync + Send + AsView + 'static,
+    Res: Message + 'static,
+    for<'b> Res::Mut<'b>: Send + ClearAndParse,
+{
+    pub fn new(
+        channel: &'a C,
+        desc: &'a MethodDescriptor<ProtoEncoder<ReqStream::Item>, ProtoDecoder<Res>>,
+        req: ReqStream,
+    ) -> Self {
+        Self {
+            channel,
+            req_stream: req,
+            desc,
+            args: Default::default(),
+        }
+    }
+}
+
+impl<'a, C, ReqStream: Stream, Res> IntoFuture for BidiCall<'a, C, ReqStream, Res>
+where
+    C: Callable,
+    ReqStream: Unpin + Stream + Send + 'static,
+    ReqStream::Item: Message + Send + Sync + 'static,
+    for<'b> <ReqStream::Item as Proxied>::View<'b>: Send + Serialize,
+    Res: Message + 'static,
+    for<'b> Res::Mut<'b>: Send + ClearAndParse,
+{
+    type Output = Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send>>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+
+    fn into_future(mut self) -> Self::IntoFuture {
+        Box::pin(async move {
+            // 1. self is moved into this async block (owning the request data).
+            // 2. self.req.as_view() creates a view pointing to that data.
+            // 3. The stream consumes that view.
+            let (tx, rx) = self.channel.call(self.desc, &self.args).await;
+
+            task::spawn(async move {
+                while let Some(req) = self.req_stream.next().await {
+                    if !tx.send_msg(&req.as_view()).await {
+                        return;
+                    }
+                }
+            });
+            Box::pin(stream! {
+                loop {
+                    let mut res = Res::default();
+                    if rx.next_msg(&mut res.as_mut()).await {
+                        yield Ok(res);
+                    } else {
+                        yield Err(rx.trailers().await);
+                        return;
+                    }
+                }
+            }) as Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send>>
+        })
+    }
+}
 /*
 pub struct BidiCall<'a, C, Enc: Encoder, Dec: Decoder, Req = <Enc as Encoder>::View<'a>>
 where
