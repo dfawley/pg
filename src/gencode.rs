@@ -1,7 +1,7 @@
 use std::sync::LazyLock;
 
 use crate::grpc::{Callable, Channel, MethodDescriptor, MethodType};
-use crate::grpc_protobuf::{BidiCall, ProtoDecoder, ProtoEncoder, UnaryCall};
+use crate::grpc_protobuf::{ProtoDecoder, ProtoEncoder, UnaryCall};
 
 pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/protobuf_generated/generated.rs"));
@@ -59,13 +59,13 @@ impl<C: Callable> MyServiceClientStub<C> {
     pub fn unary_call<'stub: 'call, 'call, R>(
         &'stub self,
         req: R,
-    ) -> UnaryCall<'call, C, ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>, R>
+    ) -> UnaryCall<'call, C, MyRequest, MyResponse, R>
     where
         R: AsView<Proxied = MyRequest> + Send + Sync + 'call,
     {
         UnaryCall::new(&self.channel, &UNARY_CALL_DESC, req)
     }
-
+    /*
     pub fn streaming_call<'stub: 'call, 'call, ReqStream>(
         &'stub self,
         req_stream: ReqStream,
@@ -75,4 +75,5 @@ impl<C: Callable> MyServiceClientStub<C> {
     {
         BidiCall::new(&self.channel, &STREAMING_CALL_DESC, req_stream)
     }
+    */
 }
