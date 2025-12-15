@@ -1,17 +1,14 @@
 use async_stream::stream;
 use futures_core::Stream;
 use futures_util::StreamExt;
-use futures_util::stream::once;
-use protobuf::{
-    AsMut, AsView, ClearAndParse, Message, MessageMut, MutProxied, Proxied, Serialize, View,
-};
+use protobuf::{AsMut, AsView, ClearAndParse, Message, Proxied, Serialize};
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::time::Duration;
-use std::{fmt::Debug, marker::PhantomData};
 use tokio::task;
 
 use crate::grpc::{
-    Args, Callable, Channel, Decoder, Encoder, MethodDescriptor, RecvStream, SendStream, Status,
+    Args, Callable, Decoder, Encoder, MethodDescriptor, RecvStream, SendStream, Status,
 };
 
 pub struct UnaryCall<'a, C, Req, Res, ReqMsg> {

@@ -1,25 +1,22 @@
 use std::fmt::Debug;
-use std::future::ready;
-use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time;
 
 use async_trait::async_trait;
-use futures_core::Stream;
 
 use crate::gencode::pb::*;
 
 #[derive(Clone, Debug)]
 pub struct Status {
     pub code: i32,
-    pub msg: String,
+    pub _msg: String,
 }
 
 impl Status {
     pub fn ok() -> Self {
         Status {
             code: 0,
-            msg: String::new(),
+            _msg: String::new(),
         }
     }
 }
@@ -47,10 +44,10 @@ pub trait Decoder: Send + Sync + Clone + 'static {
     fn decode(&self, data: &[&[u8]], item: &mut Self::Mut<'_>);
 }
 
-pub struct MethodDescriptor<Sender, Receiver> {
+pub struct MethodDescriptor<E, D> {
     pub method_name: String,
-    pub message_encoder: Sender,
-    pub message_decoder: Receiver,
+    pub message_encoder: E,
+    pub message_decoder: D,
     pub method_type: MethodType,
 }
 
@@ -58,26 +55,26 @@ pub struct MethodDescriptor<Sender, Receiver> {
 /// SendStream or calling send_final_message results in a signal the server can
 /// use to determine the client is done sending.
 #[async_trait]
-pub trait SendStream<Sender: Encoder>: Send + Sync + 'static {
+pub trait SendStream<E: Encoder>: Send + Sync + 'static {
     /// Sends msg on the stream.  If false is returned, the message could not be
     /// delivered because the stream was closed.  Future calls to SendStream
     /// will do nothing.
-    async fn send_msg(&self, msg: &Sender::View<'_>) -> bool;
+    async fn send_msg(&self, msg: &E::View<'_>) -> bool;
 
     /// Sends msg on the stream and indicates the client has no further messages
     /// to send.
-    async fn send_final_msg(self, msg: &Sender::View<'_>);
+    async fn send_final_msg(self, msg: &E::View<'_>);
 }
 
 /// RecvStream represents the receiving side of a client stream.  Dropping the
 /// RecvStream results in early RPC cancellation if the server has not already
 /// terminated the stream first.
 #[async_trait]
-pub trait RecvStream<Receiver: Decoder>: Send + Sync + 'static {
+pub trait RecvStream<D: Decoder>: Send + Sync + 'static {
     /// Receives the next message on the stream into msg.  If false is returned,
     /// msg is unmodified, the stream has finished, and trailers should be
     /// called to receive the trailers from the stream.
-    async fn next_msg(&self, msg: &mut Receiver::Mut<'_>) -> bool;
+    async fn next_msg(&self, msg: &mut D::Mut<'_>) -> bool;
 
     /// Returns the trailers for the stream, consuming the stream and any
     /// unreceived messages preceding the trailers.
@@ -86,26 +83,26 @@ pub trait RecvStream<Receiver: Decoder>: Send + Sync + 'static {
 
 #[async_trait]
 pub trait Callable: Send + Sync {
-    type SendStream<S: Encoder>: SendStream<S>;
-    type RecvStream<R: Decoder>: RecvStream<R>;
+    type SendStream<E: Encoder>: SendStream<E>;
+    type RecvStream<D: Decoder>: RecvStream<D>;
 
-    async fn call<S: Encoder, R: Decoder>(
+    async fn call<E: Encoder, D: Decoder>(
         &self,
-        descriptor: &MethodDescriptor<S, R>,
+        descriptor: &MethodDescriptor<E, D>,
         args: Args,
-    ) -> (Self::SendStream<S>, Self::RecvStream<R>);
+    ) -> (Self::SendStream<E>, Self::RecvStream<D>);
 }
 
 #[async_trait]
 impl Callable for Channel {
-    type SendStream<S: Encoder> = ChannelSendStream<S>;
-    type RecvStream<R: Decoder> = ChannelRecvStream<R>;
+    type SendStream<E: Encoder> = ChannelSendStream<E>;
+    type RecvStream<D: Decoder> = ChannelRecvStream<D>;
 
-    async fn call<S: Encoder, R: Decoder>(
+    async fn call<E: Encoder, D: Decoder>(
         &self,
-        descriptor: &MethodDescriptor<S, R>,
+        descriptor: &MethodDescriptor<E, D>,
         _args: Args,
-    ) -> (Self::SendStream<S>, Self::RecvStream<R>) {
+    ) -> (Self::SendStream<E>, Self::RecvStream<D>) {
         println!(
             "starting call for {:?} ({:?})",
             descriptor.method_name, descriptor.method_type
@@ -133,10 +130,10 @@ pub struct ChannelSendStream<T> {
 
 #[async_trait]
 impl<T: Encoder> SendStream<T> for ChannelSendStream<T> {
-    async fn send_msg(&self, msg: &T::View<'_>) -> bool {
+    async fn send_msg(&self, _msg: &T::View<'_>) -> bool {
         true // false on error sending
     }
-    async fn send_final_msg(self, msg: &T::View<'_>) {
+    async fn send_final_msg(self, _msg: &T::View<'_>) {
         // Error doesn't matter when sending final message.
     }
 }

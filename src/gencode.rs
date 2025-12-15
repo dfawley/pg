@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use crate::grpc::{Callable, Channel, MethodDescriptor, MethodType};
+use crate::grpc::{Callable, MethodDescriptor, MethodType};
 use crate::grpc_protobuf::{BidiCall, ProtoDecoder, ProtoEncoder, UnaryCall};
 
 pub mod pb {
@@ -8,7 +8,7 @@ pub mod pb {
 }
 use futures_core::Stream;
 use pb::*;
-use protobuf::{AsMut, AsView};
+use protobuf::AsView;
 
 #[derive(Clone)]
 pub struct MyServiceClientStub<C> {
