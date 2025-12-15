@@ -44,10 +44,10 @@ where
     where
         ResMsgMut: AsMut<MutProxied = Res>,
     {
-        let (tx, rx) = self.channel.call(self.desc, self.args).await;
+        let (tx, mut rx) = self.channel.call(self.desc, self.args).await;
         tx.send_final_msg(&self.req.as_view()).await;
         rx.next_msg(&mut res.as_mut()).await;
-        rx.trailers().await
+        rx.trailers().await.status
     }
 }
 
@@ -65,12 +65,12 @@ where
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let (tx, rx) = self.channel.call(self.desc, self.args).await;
+            let (tx, mut rx) = self.channel.call(self.desc, self.args).await;
 
             tx.send_final_msg(&self.req.as_view()).await;
             let mut res = Res::default();
             rx.next_msg(&mut res.as_mut()).await;
-            let status = rx.trailers().await;
+            let status = rx.trailers().await.status;
             if status.code != 0 {
                 Err(status)
             } else {
@@ -125,7 +125,7 @@ where
             // 1. self is moved into this async block (owning the request data).
             // 2. self.req.as_view() creates a view pointing to that data.
             // 3. The stream consumes that view.
-            let (tx, rx) = self.channel.call(self.desc, self.args).await;
+            let (tx, mut rx) = self.channel.call(self.desc, self.args).await;
 
             task::spawn(async move {
                 while let Some(req) = self.req_stream.next().await {
@@ -140,7 +140,7 @@ where
                     if rx.next_msg(&mut res.as_mut()).await {
                         yield Ok(res);
                     } else {
-                        yield Err(rx.trailers().await);
+                        yield Err(rx.trailers().await.status);
                         return;
                     }
                 }

@@ -21,6 +21,11 @@ impl Status {
     }
 }
 
+pub struct Headers {}
+pub struct Trailers {
+    pub status: Status,
+}
+
 #[derive(Clone, Default)]
 pub struct Channel {}
 
@@ -71,14 +76,18 @@ pub trait SendStream<E: Encoder>: Send + Sync + 'static {
 /// terminated the stream first.
 #[async_trait]
 pub trait RecvStream<D: Decoder>: Send + Sync + 'static {
+    /// Returns the response stream's headers, or None if a trailers-only
+    /// response is received.
+    async fn headers(&mut self) -> Option<Headers>;
+
     /// Receives the next message on the stream into msg.  If false is returned,
     /// msg is unmodified, the stream has finished, and trailers should be
     /// called to receive the trailers from the stream.
-    async fn next_msg(&self, msg: &mut D::Mut<'_>) -> bool;
+    async fn next_msg(&mut self, msg: &mut D::Mut<'_>) -> bool;
 
     /// Returns the trailers for the stream, consuming the stream and any
     /// unreceived messages preceding the trailers.
-    async fn trailers(self) -> Status; /* Should have all RPC trailers/etc */
+    async fn trailers(self) -> Trailers;
 }
 
 #[async_trait]
@@ -145,7 +154,11 @@ pub struct ChannelRecvStream<T> {
 
 #[async_trait]
 impl<T: Decoder> RecvStream<T> for ChannelRecvStream<T> {
-    async fn next_msg(&self, msg: &mut T::Mut<'_>) -> bool {
+    async fn headers(&mut self) -> Option<Headers> {
+        Some(Headers {})
+    }
+
+    async fn next_msg(&mut self, msg: &mut T::Mut<'_>) -> bool {
         let mut cnt = self.cnt.lock().unwrap();
         let msg: &mut MyResponseMut =
             unsafe { &mut *(msg as *mut T::Mut<'_> as *mut MyResponseMut) };
@@ -157,7 +170,9 @@ impl<T: Decoder> RecvStream<T> for ChannelRecvStream<T> {
         true
     }
 
-    async fn trailers(self) -> Status {
-        Status::ok()
+    async fn trailers(self) -> Trailers {
+        Trailers {
+            status: Status::ok(),
+        }
     }
 }
