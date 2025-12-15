@@ -10,7 +10,9 @@ use std::time::Duration;
 use std::{fmt::Debug, marker::PhantomData};
 use tokio::task;
 
-use crate::grpc::{Args, Callable, Channel, Decoder, Encoder, MethodDescriptor, Status};
+use crate::grpc::{
+    Args, Callable, Channel, Decoder, Encoder, MethodDescriptor, RecvStream, SendStream, Status,
+};
 
 pub struct UnaryCall<'a, C, Req, Res, ReqMsg> {
     channel: &'a C,
