@@ -45,7 +45,7 @@ where
     where
         ResMsgMut: AsMut<MutProxied = Res>,
     {
-        let (tx, rx) = self.channel.call(self.desc, &self.args).await;
+        let (tx, rx) = self.channel.call(self.desc, self.args).await;
         tx.send_final_msg(&self.req.as_view()).await;
         rx.next_msg(&mut res.as_mut()).await;
         rx.trailers().await
@@ -66,7 +66,7 @@ where
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let (tx, rx) = self.channel.call(self.desc, &self.args).await;
+            let (tx, rx) = self.channel.call(self.desc, self.args).await;
 
             tx.send_final_msg(&self.req.as_view()).await;
             let mut res = Res::default();
@@ -126,7 +126,7 @@ where
             // 1. self is moved into this async block (owning the request data).
             // 2. self.req.as_view() creates a view pointing to that data.
             // 3. The stream consumes that view.
-            let (tx, rx) = self.channel.call(self.desc, &self.args).await;
+            let (tx, rx) = self.channel.call(self.desc, self.args).await;
 
             task::spawn(async move {
                 while let Some(req) = self.req_stream.next().await {
@@ -183,6 +183,7 @@ impl<T: CallArgs> SharedCall for T {
     }
 }
 
+#[derive(Clone)]
 pub struct ProtoEncoder<M>(PhantomData<M>);
 
 impl<M> ProtoEncoder<M> {
@@ -196,7 +197,6 @@ where
     M: Message + 'static,
     for<'a> M::View<'a>: Send + Serialize,
 {
-    type Message = M;
     type View<'a> = M::View<'a>;
 
     fn encode<'a>(&self, item: &Self::View<'a>) -> Vec<Vec<u8>> {
@@ -204,6 +204,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct ProtoDecoder<M>(PhantomData<M>);
 
 impl<M> ProtoDecoder<M> {
@@ -217,10 +218,9 @@ where
     M: Message + 'static,
     for<'a> M::Mut<'a>: Send + ClearAndParse,
 {
-    type Message = M;
-    type MutView<'a> = M::Mut<'a>;
+    type Mut<'a> = M::Mut<'a>;
 
-    fn decode<'a>(&self, data: &[&[u8]], item: &mut Self::MutView<'a>) {
+    fn decode<'a>(&self, data: &[&[u8]], item: &mut Self::Mut<'a>) {
         item.clear_and_parse(data[0]).unwrap();
     }
 }

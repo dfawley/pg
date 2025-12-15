@@ -35,18 +35,16 @@ pub enum MethodType {
     BidiStream,
 }
 
-pub trait Encoder: Send + Sync {
-    type Message: Send + Sync + 'static;
+pub trait Encoder: Send + Sync + Clone {
     type View<'a>: Send + Sync;
 
     fn encode<'a>(&self, item: &Self::View<'a>) -> Vec<Vec<u8>>;
 }
 
-pub trait Decoder: Send + Sync {
-    type Message: Send + Sync + 'static;
-    type MutView<'a>: Send + Sync;
+pub trait Decoder: Send + Sync + Clone {
+    type Mut<'a>: Send + Sync;
 
-    fn decode<'a>(&self, data: &[&[u8]], item: &mut Self::MutView<'a>);
+    fn decode<'a>(&self, data: &[&[u8]], item: &mut Self::Mut<'a>);
 }
 
 pub struct MethodDescriptor<Sender, Receiver> {
@@ -60,7 +58,7 @@ pub trait Callable: Send + Sync {
     fn call<Sender: Encoder, Receiver: Decoder>(
         &self,
         descriptor: &MethodDescriptor<Sender, Receiver>,
-        args: &Args,
+        args: Args,
     ) -> impl std::future::Future<Output = (SendStream<Sender>, RecvStream<Receiver>)> + Send;
 }
 
@@ -68,16 +66,18 @@ impl Callable for Channel {
     fn call<Sender: Encoder, Receiver: Decoder>(
         &self,
         descriptor: &MethodDescriptor<Sender, Receiver>,
-        _args: &Args,
+        _args: Args,
     ) -> impl std::future::Future<Output = (SendStream<Sender>, RecvStream<Receiver>)> + Send {
         println!(
             "starting call for {:?} ({:?})",
             descriptor.method_name, descriptor.method_type
         );
         std::future::ready((
-            SendStream(PhantomData),
+            SendStream {
+                _e: descriptor.message_encoder.clone(),
+            },
             RecvStream {
-                _d: PhantomData,
+                _d: descriptor.message_decoder.clone(),
                 cnt: Mutex::new(0),
             },
         ))
@@ -92,9 +92,11 @@ pub struct Args {
 /// SendStream represents the sending side of a client stream.  Dropping the
 /// SendStream or calling send_final_message results in a signal the server can
 /// use to determine the client is done sending.
-pub struct SendStream<T>(PhantomData<T>);
+pub struct SendStream<T> {
+    _e: T,
+}
 
-impl<T: Encoder> SendStream<T> {
+impl<'call, T: Encoder> SendStream<T> {
     /// Sends msg on the stream.  If false is returned, the message could not be
     /// delivered because the stream was closed.  Future calls to SendStream
     /// will do nothing.
@@ -111,20 +113,19 @@ impl<T: Encoder> SendStream<T> {
 /// RecvStream represents the receiving side of a client stream.  Dropping the
 /// RecvStream results in early RPC cancellation if the server has not already
 /// terminated the stream first.
-#[derive(Default)]
 pub struct RecvStream<T> {
     cnt: Mutex<i32>,
-    _d: PhantomData<T>,
+    _d: T,
 }
 
 impl<T: Decoder> RecvStream<T> {
     /// Receives the next message on the stream into msg.  If false is returned,
     /// msg is unmodified, the stream has finished, and trailers should be
     /// called to receive the trailers from the stream.
-    pub async fn next_msg(&self, msg: &mut T::MutView<'_>) -> bool {
+    pub async fn next_msg(&self, msg: &mut T::Mut<'_>) -> bool {
         let mut cnt = self.cnt.lock().unwrap();
         let msg: &mut MyResponseMut =
-            unsafe { &mut *(msg as *mut T::MutView<'_> as *mut MyResponseMut) };
+            unsafe { &mut *(msg as *mut T::Mut<'_> as *mut MyResponseMut) };
         if *cnt == 3 {
             return false;
         }
