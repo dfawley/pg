@@ -56,12 +56,12 @@ static STREAMING_CALL_DESC: LazyLock<
 });
 
 impl<C: Callable> MyServiceClientStub<C> {
-    pub fn unary_call<'stub: 'call, 'call, R>(
+    pub fn unary_call<'stub: 'call, 'call, ReqMsgView>(
         &'stub self,
-        req: R,
-    ) -> UnaryCall<'call, C, MyRequest, MyResponse, R>
+        req: ReqMsgView,
+    ) -> UnaryCall<'call, C, MyRequest, MyResponse, ReqMsgView>
     where
-        R: AsView<Proxied = MyRequest> + Send + Sync + 'call,
+        ReqMsgView: AsView<Proxied = MyRequest> + Send + Sync + 'call,
     {
         UnaryCall::new(&self.channel, &UNARY_CALL_DESC, req)
     }
