@@ -1,6 +1,6 @@
 use async_stream::stream;
 use futures_core::Stream;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, stream::select};
 use protobuf::{AsMut, AsView, ClearAndParse, Message, Proxied, Serialize};
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -102,33 +102,37 @@ impl<'a, C, ReqStream: Stream, Res> BidiCall<'a, C, ReqStream, Res> {
     }
 }
 
-impl<'a, C, ReqStream: Stream, Res> IntoFuture for BidiCall<'a, C, ReqStream, Res>
+impl<'a, C, ReqStream, Res> IntoFuture for BidiCall<'a, C, ReqStream, Res>
 where
     C: Callable,
-    ReqStream: Unpin + Stream + Send + 'static,
+    ReqStream: Unpin + Stream + Send + 'a,
     ReqStream::Item: Message + Send + Sync + 'static,
     for<'b> <ReqStream::Item as Proxied>::View<'b>: Send + Serialize,
     Res: Message + 'static,
     for<'b> Res::Mut<'b>: Send + ClearAndParse,
 {
-    type Output = Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send>>;
+    type Output = Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send + 'a>>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
-            // 1. self is moved into this async block (owning the request data).
-            // 2. self.req.as_view() creates a view pointing to that data.
-            // 3. The stream consumes that view.
-            let (tx, mut rx) = self.channel.call(self.desc, self.args).await;
+            let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
 
-            task::spawn(async move {
+            // Create a stream for sending data.  Yields None after every
+            // message to cause the receiver stream to be polled.
+            let sender = stream! {
                 while let Some(req) = self.req_stream.next().await {
                     if !tx.send_msg(req.as_view()).await {
                         return;
                     }
+                    yield None;
                 }
-            });
-            Box::pin(stream! {
+            };
+
+            // Create a stream for receiving data.  Yields Ok(response) or
+            // Err(trailers).  Wrapped in a Some to be combined with the
+            // sender stream.
+            let receiver = stream! {
                 loop {
                     let mut res = Res::default();
                     if rx.next_msg(res.as_mut()).await {
@@ -138,11 +142,16 @@ where
                         return;
                     }
                 }
-            }) as Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send>>
+            }
+            .map(Some);
+
+            // Filter out sender stream None values and propagate the receiver
+            // stream only.
+            Box::pin(select(sender, receiver).filter_map(|item| async move { item }))
+                as Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send + 'a>>
         })
     }
 }
-
 mod private {
     pub(crate) trait Sealed {}
 }
