@@ -45,7 +45,7 @@ where
         ResMsgMut: AsMut<MutProxied = Res>,
     {
         let (tx, mut rx) = self.channel.call(self.desc, self.args).await;
-        tx.send_final_msg(&self.req.as_view()).await;
+        tx.send_and_close(&self.req.as_view()).await;
         rx.next_msg(&mut res.as_mut()).await;
         rx.trailers().await.status
     }
@@ -67,7 +67,7 @@ where
         Box::pin(async move {
             let (tx, mut rx) = self.channel.call(self.desc, self.args).await;
 
-            tx.send_final_msg(&self.req.as_view()).await;
+            tx.send_and_close(&self.req.as_view()).await;
             let mut res = Res::default();
             rx.next_msg(&mut res.as_mut()).await;
             let status = rx.trailers().await.status;
@@ -198,7 +198,7 @@ where
 {
     type View<'a> = M::View<'a>;
 
-    fn encode<'a>(&self, item: &Self::View<'a>) -> Vec<Vec<u8>> {
+    fn encode<'a>(&self, item: Self::View<'a>) -> Vec<Vec<u8>> {
         vec![item.serialize().unwrap()]
     }
 }
@@ -219,7 +219,7 @@ where
 {
     type Mut<'a> = M::Mut<'a>;
 
-    fn decode<'a>(&self, data: &[&[u8]], item: &mut Self::Mut<'a>) {
-        item.clear_and_parse(data[0]).unwrap();
+    fn decode<'a>(&self, data: Vec<Vec<u8>>, mut item: Self::Mut<'a>) {
+        item.clear_and_parse(data.as_slice()[0].as_slice()).unwrap();
     }
 }

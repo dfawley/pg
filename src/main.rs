@@ -135,8 +135,8 @@ mod interceptor {
 
         /// Sends msg on the stream and indicates the client has no further messages
         /// to send.
-        async fn send_final_msg(self, msg: &E::View<'_>) {
-            self.delegate.send_final_msg(msg).await
+        async fn send_and_close(self, msg: &E::View<'_>) {
+            self.delegate.send_and_close(msg).await
         }
     }
 

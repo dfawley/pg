@@ -40,13 +40,13 @@ pub enum MethodType {
 pub trait Encoder: Send + Sync + Clone + 'static {
     type View<'a>: Send + Sync;
 
-    fn encode(&self, item: &Self::View<'_>) -> Vec<Vec<u8>>;
+    fn encode(&self, item: Self::View<'_>) -> Vec<Vec<u8>>;
 }
 
 pub trait Decoder: Send + Sync + Clone + 'static {
     type Mut<'a>: Send + Sync;
 
-    fn decode(&self, data: &[&[u8]], item: &mut Self::Mut<'_>);
+    fn decode(&self, data: Vec<Vec<u8>>, item: Self::Mut<'_>);
 }
 
 pub struct MethodDescriptor<E, D> {
@@ -68,7 +68,7 @@ pub trait SendStream<E: Encoder>: Send + Sync + 'static {
 
     /// Sends msg on the stream and indicates the client has no further messages
     /// to send.
-    async fn send_final_msg(self, msg: &E::View<'_>);
+    async fn send_and_close(self, msg: &E::View<'_>);
 }
 
 /// RecvStream represents the receiving side of a client stream.  Dropping the
@@ -142,7 +142,7 @@ impl<T: Encoder> SendStream<T> for ChannelSendStream<T> {
     async fn send_msg(&self, _msg: &T::View<'_>) -> bool {
         true // false on error sending
     }
-    async fn send_final_msg(self, _msg: &T::View<'_>) {
+    async fn send_and_close(self, _msg: &T::View<'_>) {
         // Error doesn't matter when sending final message.
     }
 }
