@@ -64,11 +64,11 @@ pub trait SendStream<E: Encoder>: Send + Sync + 'static {
     /// Sends msg on the stream.  If false is returned, the message could not be
     /// delivered because the stream was closed.  Future calls to SendStream
     /// will do nothing.
-    async fn send_msg(&self, msg: &E::View<'_>) -> bool;
+    async fn send_msg(&self, msg: E::View<'_>) -> bool;
 
     /// Sends msg on the stream and indicates the client has no further messages
     /// to send.
-    async fn send_and_close(self, msg: &E::View<'_>);
+    async fn send_and_close(self, msg: E::View<'_>);
 }
 
 /// RecvStream represents the receiving side of a client stream.  Dropping the
@@ -83,7 +83,7 @@ pub trait RecvStream<D: Decoder>: Send + Sync + 'static {
     /// Receives the next message on the stream into msg.  If false is returned,
     /// msg is unmodified, the stream has finished, and trailers should be
     /// called to receive the trailers from the stream.
-    async fn next_msg(&mut self, msg: &mut D::Mut<'_>) -> bool;
+    async fn next_msg(&mut self, msg: D::Mut<'_>) -> bool;
 
     /// Returns the trailers for the stream, consuming the stream and any
     /// unreceived messages preceding the trailers.
@@ -139,10 +139,10 @@ pub struct ChannelSendStream<T> {
 
 #[async_trait]
 impl<T: Encoder> SendStream<T> for ChannelSendStream<T> {
-    async fn send_msg(&self, _msg: &T::View<'_>) -> bool {
+    async fn send_msg(&self, _msg: T::View<'_>) -> bool {
         true // false on error sending
     }
-    async fn send_and_close(self, _msg: &T::View<'_>) {
+    async fn send_and_close(self, _msg: T::View<'_>) {
         // Error doesn't matter when sending final message.
     }
 }
@@ -158,10 +158,10 @@ impl<T: Decoder> RecvStream<T> for ChannelRecvStream<T> {
         Some(Headers {})
     }
 
-    async fn next_msg(&mut self, msg: &mut T::Mut<'_>) -> bool {
+    async fn next_msg(&mut self, mut msg: T::Mut<'_>) -> bool {
         let mut cnt = self.cnt.lock().unwrap();
         let msg: &mut MyResponseMut =
-            unsafe { &mut *(msg as *mut T::Mut<'_> as *mut MyResponseMut) };
+            unsafe { &mut *(&mut msg as *mut T::Mut<'_> as *mut MyResponseMut) };
         if *cnt == 3 {
             return false;
         }

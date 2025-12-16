@@ -129,13 +129,13 @@ mod interceptor {
 
     #[async_trait]
     impl<E: Encoder, Delegate: SendStream<E>> SendStream<E> for SendInterceptor<Delegate> {
-        async fn send_msg(&self, msg: &E::View<'_>) -> bool {
+        async fn send_msg(&self, msg: E::View<'_>) -> bool {
             self.delegate.send_msg(msg).await
         }
 
         /// Sends msg on the stream and indicates the client has no further messages
         /// to send.
-        async fn send_and_close(self, msg: &E::View<'_>) {
+        async fn send_and_close(self, msg: E::View<'_>) {
             self.delegate.send_and_close(msg).await
         }
     }
@@ -153,7 +153,7 @@ mod interceptor {
             }
             None
         }
-        async fn next_msg(&mut self, msg: &mut D::Mut<'_>) -> bool {
+        async fn next_msg(&mut self, msg: D::Mut<'_>) -> bool {
             self.delegate.next_msg(msg).await
         }
         async fn trailers(self) -> Trailers {

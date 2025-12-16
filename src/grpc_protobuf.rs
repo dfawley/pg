@@ -45,8 +45,8 @@ where
         ResMsgMut: AsMut<MutProxied = Res>,
     {
         let (tx, mut rx) = self.channel.call(self.desc, self.args).await;
-        tx.send_and_close(&self.req.as_view()).await;
-        rx.next_msg(&mut res.as_mut()).await;
+        tx.send_and_close(self.req.as_view()).await;
+        rx.next_msg(res.as_mut()).await;
         rx.trailers().await.status
     }
 }
@@ -67,9 +67,9 @@ where
         Box::pin(async move {
             let (tx, mut rx) = self.channel.call(self.desc, self.args).await;
 
-            tx.send_and_close(&self.req.as_view()).await;
+            tx.send_and_close(self.req.as_view()).await;
             let mut res = Res::default();
-            rx.next_msg(&mut res.as_mut()).await;
+            rx.next_msg(res.as_mut()).await;
             let status = rx.trailers().await.status;
             if status.code != 0 {
                 Err(status)
@@ -123,7 +123,7 @@ where
 
             task::spawn(async move {
                 while let Some(req) = self.req_stream.next().await {
-                    if !tx.send_msg(&req.as_view()).await {
+                    if !tx.send_msg(req.as_view()).await {
                         return;
                     }
                 }
@@ -131,7 +131,7 @@ where
             Box::pin(stream! {
                 loop {
                     let mut res = Res::default();
-                    if rx.next_msg(&mut res.as_mut()).await {
+                    if rx.next_msg(res.as_mut()).await {
                         yield Ok(res);
                     } else {
                         yield Err(rx.trailers().await.status);
