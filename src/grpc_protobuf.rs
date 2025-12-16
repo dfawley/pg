@@ -11,10 +11,10 @@ use crate::grpc::{
     Args, Callable, Decoder, Encoder, MethodDescriptor, RecvStream, SendStream, Status,
 };
 
-pub struct UnaryCall<'a, C, Req, Res, ReqMsg> {
+pub struct UnaryCall<'a, C, Req, Res, ReqMsgView> {
     channel: &'a C,
     desc: &'a MethodDescriptor<ProtoEncoder<Req>, ProtoDecoder<Res>>,
-    req: ReqMsg,
+    req: ReqMsgView,
     args: Args,
 }
 
@@ -23,7 +23,7 @@ where
     C: Callable,
     Req: Message + 'static,
     Res: Message + 'static,
-    ReqMsgView: AsView<Proxied = Req> + 'a,
+    ReqMsgView: AsView<Proxied = Req>,
     for<'b> Req::View<'b>: Send + Serialize,
     for<'b> Res::Mut<'b>: Send + ClearAndParse,
 {
@@ -51,12 +51,12 @@ where
     }
 }
 
-impl<'a, C, Req, Res, ReqMsg> IntoFuture for UnaryCall<'a, C, Req, Res, ReqMsg>
+impl<'a, C, Req, Res, ReqMsgView> IntoFuture for UnaryCall<'a, C, Req, Res, ReqMsgView>
 where
     C: Callable,
     Req: Message + 'static,
     Res: Message + 'static,
-    ReqMsg: AsView<Proxied = Req> + Send + 'a,
+    ReqMsgView: AsView<Proxied = Req> + Send + 'a,
     for<'b> Req::View<'b>: Send + Serialize,
     for<'b> Res::Mut<'b>: Send + ClearAndParse,
 {
@@ -87,13 +87,7 @@ pub struct BidiCall<'a, C, ReqStream: Stream, Res> {
     args: Args,
 }
 
-impl<'a, C, ReqStream: Stream, Res> BidiCall<'a, C, ReqStream, Res>
-where
-    ReqStream: Unpin + Stream + Send + 'static,
-    ReqStream::Item: Sync + Send + AsView + 'static,
-    Res: Message + 'static,
-    for<'b> Res::Mut<'b>: Send + ClearAndParse,
-{
+impl<'a, C, ReqStream: Stream, Res> BidiCall<'a, C, ReqStream, Res> {
     pub fn new(
         channel: &'a C,
         desc: &'a MethodDescriptor<ProtoEncoder<ReqStream::Item>, ProtoDecoder<Res>>,
