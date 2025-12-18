@@ -90,6 +90,7 @@ async fn unary<C: Callable>(client: MyServiceClientStub<C>) {
 
 mod interceptor {
     use crate::grpc::Args;
+    use crate::grpc::Call;
     use crate::grpc::Callable;
     use crate::grpc::Decoder;
     use crate::grpc::Encoder;
@@ -104,20 +105,28 @@ mod interceptor {
         pub inner: C,
     }
 
-    impl<C: Callable> Callable for CallInterceptor<C> {
-        type SendStream<E: Encoder> = SendInterceptor<C::SendStream<E>>;
-        type RecvStream<D: Decoder> = RecvInterceptor<C::RecvStream<D>>;
+    impl<E: Encoder, D: Decoder, C: Callable> Call<E, D> for CallInterceptor<C> {
+        type SendStream = SendInterceptor<<C::Out<E, D> as Call<E, D>>::SendStream>;
+        type RecvStream = RecvInterceptor<<C::Out<E, D> as Call<E, D>>::RecvStream>;
 
-        async fn call<E: Encoder, D: Decoder>(
-            &self,
+        async fn start(
+            self,
             descriptor: MethodDescriptor<E, D>,
             args: Args,
-        ) -> (Self::SendStream<E>, Self::RecvStream<D>) {
-            let (tx, rx) = self.inner.call(descriptor, args).await;
+        ) -> (Self::SendStream, Self::RecvStream) {
+            let (tx, rx) = self.inner.call().start(descriptor, args).await;
             (
                 SendInterceptor { delegate: tx },
                 RecvInterceptor { delegate: rx },
             )
+        }
+    }
+
+    impl<C: Callable + Clone> Callable for CallInterceptor<C> {
+        type Out<E: Encoder, D: Decoder> = CallInterceptor<C>;
+
+        fn call<E: Encoder, D: Decoder>(&self) -> Self::Out<E, D> {
+            self.clone()
         }
     }
 
@@ -126,11 +135,11 @@ mod interceptor {
     }
 
     impl<E: Encoder, Delegate: SendStream<E>> SendStream<E> for SendInterceptor<Delegate> {
-        async fn send_msg<'a>(&'a self, msg: E::View<'a>) -> bool {
+        async fn send_msg<'a>(&'a mut self, msg: E::View<'a>) -> bool {
             self.delegate.send_msg(msg).await
         }
 
-        async fn send_and_close<'a>(self, msg: E::View<'a>) {
+        async fn send_and_close<'a>(&'a mut self, msg: E::View<'a>) {
             self.delegate.send_and_close(msg).await
         }
     }

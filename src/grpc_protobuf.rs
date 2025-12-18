@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::task;
 
 use crate::grpc::{
-    Args, Callable, Decoder, Encoder, MethodDescriptor, RecvStream, SendStream, Status,
+    Args, Call as _, Callable, Decoder, Encoder, MethodDescriptor, RecvStream, SendStream, Status,
 };
 
 pub struct UnaryCall<'a, C, Req, Res, ReqMsgView> {
@@ -44,26 +44,10 @@ where
     where
         ResMsgMut: AsMut<MutProxied = Res>,
     {
-        let (tx, mut rx) = self.channel.call(self.desc, self.args).await;
+        let (mut tx, mut rx) = self.channel.call().start(self.desc, self.args).await;
         tx.send_and_close(self.req.as_view()).await;
         rx.next_msg(res.as_mut()).await;
         rx.trailers().await.status
-    }
-
-    async fn invoke(self) -> Result<Res, Status> {
-        let (tx, mut rx) = self.channel.call(self.desc, self.args).await;
-
-        tx.send_and_close(self.req.as_view()).await;
-
-        let mut res = Res::default();
-        rx.next_msg(res.as_mut()).await;
-
-        let status = rx.trailers().await.status;
-        if status.code != 0 {
-            Err(status)
-        } else {
-            Ok(res)
-        }
     }
 }
 
@@ -80,7 +64,21 @@ where
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(self.invoke())
+        Box::pin(async move {
+            let (mut tx, mut rx) = self.channel.call().start(self.desc, self.args).await;
+
+            tx.send_and_close(self.req.as_view()).await;
+
+            let mut res = Res::default();
+            rx.next_msg(res.as_mut()).await;
+
+            let status = rx.trailers().await.status;
+            if status.code != 0 {
+                Err(status)
+            } else {
+                Ok(res)
+            }
+        })
     }
 }
 
@@ -120,7 +118,7 @@ where
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
-            let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
+            let (mut tx, mut rx) = self.channel.call().start(self.desc, self.args).await;
 
             // Create a stream for sending data.  Yields None after every
             // message to cause the receiver stream to be polled.

@@ -61,11 +61,13 @@ pub trait SendStream<E: Encoder>: Send + Sync + 'static {
     /// Sends msg on the stream.  If false is returned, the message could not be
     /// delivered because the stream was closed.  Future calls to SendStream
     /// will do nothing.
-    fn send_msg<'a>(&'a self, msg: E::View<'a>) -> impl Future<Output = bool> + Send + 'a;
+    fn send_msg<'a>(&'a mut self, msg: E::View<'a>) -> impl Future<Output = bool> + Send + 'a;
 
     /// Sends msg on the stream and indicates the client has no further messages
     /// to send.
-    fn send_and_close<'a>(self, msg: E::View<'a>) -> impl Future<Output = ()> + Send + 'a;
+    // TODO - This should consume self, but that fails without the new trait
+    // solver.
+    fn send_and_close<'a>(&'a mut self, msg: E::View<'a>) -> impl Future<Output = ()> + Send + 'a;
 }
 
 /// RecvStream represents the receiving side of a client stream.  Dropping the
@@ -86,26 +88,34 @@ pub trait RecvStream<D: Decoder>: Send + Sync + 'static {
     fn trailers(self) -> impl Future<Output = Trailers> + Send;
 }
 
-pub trait Callable: Send + Sync {
-    type SendStream<E: Encoder>: SendStream<E>;
-    type RecvStream<D: Decoder>: RecvStream<D>;
+pub trait Call<E: Encoder, D: Decoder>: Send + Sync {
+    type SendStream: SendStream<E>;
+    type RecvStream: RecvStream<D>;
 
-    fn call<E: Encoder, D: Decoder>(
-        &self,
+    fn start(
+        self,
         descriptor: MethodDescriptor<E, D>,
         args: Args,
-    ) -> impl Future<Output = (Self::SendStream<E>, Self::RecvStream<D>)> + Send;
+    ) -> impl Future<Output = (Self::SendStream, Self::RecvStream)> + Send;
 }
 
-impl Callable for Channel {
-    type SendStream<E: Encoder> = ChannelSendStream<E>;
-    type RecvStream<D: Decoder> = ChannelRecvStream<D>;
+pub trait Callable: Send + Sync {
+    type Out<E: Encoder, D: Decoder>: Call<E, D>;
 
-    async fn call<E: Encoder, D: Decoder>(
-        &self,
+    fn call<E: Encoder, D: Decoder>(&self) -> Self::Out<E, D>;
+}
+
+pub struct ChannelCall;
+
+impl<E: Encoder, D: Decoder> Call<E, D> for ChannelCall {
+    type SendStream = ChannelSendStream<E>;
+    type RecvStream = ChannelRecvStream<D>;
+
+    async fn start(
+        self,
         descriptor: MethodDescriptor<E, D>,
         _args: Args,
-    ) -> (Self::SendStream<E>, Self::RecvStream<D>) {
+    ) -> (Self::SendStream, Self::RecvStream) {
         println!(
             "starting call for {:?} ({:?})",
             descriptor.method_name, descriptor.method_type
@@ -122,6 +132,14 @@ impl Callable for Channel {
     }
 }
 
+impl Callable for Channel {
+    type Out<E: Encoder, D: Decoder> = ChannelCall;
+
+    fn call<E: Encoder, D: Decoder>(&self) -> Self::Out<E, D> {
+        ChannelCall {}
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Args {
     pub timeout: time::Duration,
@@ -132,10 +150,10 @@ pub struct ChannelSendStream<T> {
 }
 
 impl<T: Encoder> SendStream<T> for ChannelSendStream<T> {
-    async fn send_msg<'a>(&'a self, _msg: T::View<'a>) -> bool {
+    async fn send_msg<'a>(&'a mut self, _msg: T::View<'a>) -> bool {
         true // false on error sending
     }
-    async fn send_and_close(self, _msg: T::View<'_>) {
+    async fn send_and_close<'a>(&'a mut self, _msg: T::View<'a>) {
         // Error doesn't matter when sending final message.
     }
 }
