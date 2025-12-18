@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use crate::grpc::{Callable, Interceptor, MethodDescriptor, MethodType};
+use crate::grpc::{Callable, InterceptedChannel, Interceptor, MethodDescriptor, MethodType};
 use crate::grpc_protobuf::{BidiCall, ProtoDecoder, ProtoEncoder, UnaryCall};
 
 pub mod pb {
@@ -20,12 +20,15 @@ impl<C: Callable + Clone> MyServiceClientStub<C> {
         Self { channel }
     }
 
-    pub fn with_interceptor<I: Interceptor<C>>(
+    pub fn with_interceptor<I: Interceptor>(
         &self,
         interceptor: I,
-    ) -> MyServiceClientStub<I::Out> {
+    ) -> MyServiceClientStub<InterceptedChannel<C, I>> {
         MyServiceClientStub {
-            channel: interceptor.wrap(self.channel.clone()),
+            channel: InterceptedChannel {
+                inner: self.channel.clone(),
+                interceptor,
+            },
         }
     }
 }

@@ -207,7 +207,7 @@ where
 {
     type Item<'a> = M::View<'a>;
 
-    fn encode<'a>(&self, item: Self::Item<'a>) -> Vec<Vec<u8>> {
+    fn encode<'a>(&mut self, item: Self::Item<'a>) -> Vec<Vec<u8>> {
         vec![item.serialize().unwrap()]
     }
 }

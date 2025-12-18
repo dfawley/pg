@@ -38,23 +38,23 @@ pub enum MethodType {
     BidiStream,
 }
 
+pub struct MethodDescriptor<E, D> {
+    pub method_name: String,
+    pub message_encoder: E,
+    pub message_decoder: D,
+    pub method_type: MethodType,
+}
+
 pub trait Encoder: Send + Sync + Clone + 'static {
     type Item<'a>: Send + Sync;
 
-    fn encode(&self, item: Self::Item<'_>) -> Vec<Vec<u8>>;
+    fn encode(&mut self, item: Self::Item<'_>) -> Vec<Vec<u8>>;
 }
 
 pub trait Decoder: Send + Sync {
     type Item;
 
     fn decode(&mut self, data: Vec<Vec<u8>>) -> Self::Item;
-}
-
-pub struct MethodDescriptor<E, D> {
-    pub method_name: String,
-    pub message_encoder: E,
-    pub message_decoder: D,
-    pub method_type: MethodType,
 }
 
 /// SendStream represents the sending side of a client stream.  Dropping the
@@ -105,12 +105,6 @@ pub trait Callable: Send + Sync {
         descriptor: MethodDescriptor<E, D>,
         args: Args,
     ) -> (Self::SendStream<E>, Self::RecvStream<D>);
-}
-
-pub trait Interceptor<Delegate: Callable> {
-    type Out: Callable;
-
-    fn wrap(&self, inner: Delegate) -> Self::Out;
 }
 
 #[async_trait]
@@ -191,5 +185,39 @@ impl<D: Decoder> RecvStream for ChannelRecvStream<D> {
         Trailers {
             status: Status::ok(),
         }
+    }
+}
+
+#[async_trait]
+pub trait Interceptor: Send + Sync {
+    type CallSendStream<C: Callable, E: Encoder>: for<'a> SendStream<Message<'a> = E::Item<'a>>;
+    type CallRecvStream<C: Callable, D: Decoder>: RecvStream<Message = D::Item>;
+
+    async fn intercept<E: Encoder, D: Decoder, C: Callable>(
+        &self,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+        next: &C,
+    ) -> (Self::CallSendStream<C, E>, Self::CallRecvStream<C, D>);
+}
+
+pub struct InterceptedChannel<C, I> {
+    pub inner: C,
+    pub interceptor: I,
+}
+
+#[async_trait]
+impl<C: Callable, I: Interceptor> Callable for InterceptedChannel<C, I> {
+    type SendStream<E: Encoder> = I::CallSendStream<C, E>;
+    type RecvStream<D: Decoder> = I::CallRecvStream<C, D>;
+
+    async fn call<E: Encoder, D: Decoder>(
+        &self,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+    ) -> (Self::SendStream<E>, Self::RecvStream<D>) {
+        self.interceptor
+            .intercept(descriptor, args, &self.inner)
+            .await
     }
 }
