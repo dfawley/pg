@@ -98,14 +98,12 @@ mod interceptor {
     use crate::grpc::RecvStream;
     use crate::grpc::SendStream;
     use crate::grpc::Trailers;
-    use async_trait::async_trait;
 
     #[derive(Clone)]
     pub struct CallInterceptor<C> {
         pub inner: C,
     }
 
-    #[async_trait]
     impl<C: Callable> Callable for CallInterceptor<C> {
         type SendStream<E: Encoder> = SendInterceptor<C::SendStream<E>>;
         type RecvStream<D: Decoder> = RecvInterceptor<C::RecvStream<D>>;
@@ -127,15 +125,12 @@ mod interceptor {
         delegate: Delegate,
     }
 
-    #[async_trait]
     impl<E: Encoder, Delegate: SendStream<E>> SendStream<E> for SendInterceptor<Delegate> {
-        async fn send_msg(&self, msg: E::View<'_>) -> bool {
+        async fn send_msg<'a>(&'a self, msg: E::View<'a>) -> bool {
             self.delegate.send_msg(msg).await
         }
 
-        /// Sends msg on the stream and indicates the client has no further messages
-        /// to send.
-        async fn send_and_close(self, msg: E::View<'_>) {
+        async fn send_and_close<'a>(self, msg: E::View<'a>) {
             self.delegate.send_and_close(msg).await
         }
     }
@@ -144,7 +139,6 @@ mod interceptor {
         delegate: Delegate,
     }
 
-    #[async_trait]
     impl<D: Decoder, Delegate: RecvStream<D>> RecvStream<D> for RecvInterceptor<Delegate> {
         async fn headers(&mut self) -> Option<Headers> {
             let headers = self.delegate.headers().await;
@@ -153,7 +147,7 @@ mod interceptor {
             }
             None
         }
-        async fn next_msg(&mut self, msg: D::Mut<'_>) -> bool {
+        async fn next_msg<'a>(&'a mut self, msg: D::Mut<'a>) -> bool {
             self.delegate.next_msg(msg).await
         }
         async fn trailers(self) -> Trailers {

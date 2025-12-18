@@ -23,7 +23,7 @@ where
     C: Callable,
     Req: Message + 'static,
     Res: Message + 'static,
-    ReqMsgView: AsView<Proxied = Req>,
+    ReqMsgView: AsView<Proxied = Req> + Send + 'a,
     for<'b> Req::View<'b>: Send + Serialize,
     for<'b> Res::Mut<'b>: Send + ClearAndParse,
 {
@@ -49,6 +49,22 @@ where
         rx.next_msg(res.as_mut()).await;
         rx.trailers().await.status
     }
+
+    async fn invoke(self) -> Result<Res, Status> {
+        let (tx, mut rx) = self.channel.call(self.desc, self.args).await;
+
+        tx.send_and_close(self.req.as_view()).await;
+
+        let mut res = Res::default();
+        rx.next_msg(res.as_mut()).await;
+
+        let status = rx.trailers().await.status;
+        if status.code != 0 {
+            Err(status)
+        } else {
+            Ok(res)
+        }
+    }
 }
 
 impl<'a, C, Req, Res, ReqMsgView> IntoFuture for UnaryCall<'a, C, Req, Res, ReqMsgView>
@@ -64,19 +80,7 @@ where
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move {
-            let (tx, mut rx) = self.channel.call(self.desc, self.args).await;
-
-            tx.send_and_close(self.req.as_view()).await;
-            let mut res = Res::default();
-            rx.next_msg(res.as_mut()).await;
-            let status = rx.trailers().await.status;
-            if status.code != 0 {
-                Err(status)
-            } else {
-                Ok(res)
-            }
-        })
+        Box::pin(self.invoke())
     }
 }
 
