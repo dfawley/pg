@@ -112,7 +112,7 @@ mod interceptor {
 
         async fn call<E: Encoder, D: Decoder>(
             &self,
-            descriptor: &MethodDescriptor<E, D>,
+            descriptor: MethodDescriptor<E, D>,
             args: Args,
         ) -> (Self::SendStream<E>, Self::RecvStream<D>) {
             let (tx, rx) = self.inner.call(descriptor, args).await;

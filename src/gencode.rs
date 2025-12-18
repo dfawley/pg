@@ -37,24 +37,6 @@ impl<C> MyServiceClientStub<C> {
     }
 }
 
-static UNARY_CALL_DESC: LazyLock<
-    MethodDescriptor<ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>>,
-> = LazyLock::new(|| MethodDescriptor {
-    method_name: "unary_call".to_string(),
-    message_encoder: ProtoEncoder::new(),
-    message_decoder: ProtoDecoder::new(),
-    method_type: MethodType::Unary,
-});
-
-static STREAMING_CALL_DESC: LazyLock<
-    MethodDescriptor<ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>>,
-> = LazyLock::new(|| MethodDescriptor {
-    method_name: "streaming_call".to_string(),
-    message_encoder: ProtoEncoder::new(),
-    message_decoder: ProtoDecoder::new(),
-    method_type: MethodType::BidiStream,
-});
-
 impl<C: Callable> MyServiceClientStub<C> {
     pub fn unary_call<'stub: 'call, 'call, ReqMsgView>(
         &'stub self,
@@ -63,7 +45,16 @@ impl<C: Callable> MyServiceClientStub<C> {
     where
         ReqMsgView: AsView<Proxied = MyRequest> + Send + Sync + 'call,
     {
-        UnaryCall::new(&self.channel, &UNARY_CALL_DESC, req)
+        UnaryCall::new(
+            &self.channel,
+            MethodDescriptor {
+                method_name: "unary_call".to_string(),
+                message_encoder: ProtoEncoder::new(),
+                message_decoder: ProtoDecoder::new(),
+                method_type: MethodType::Unary,
+            },
+            req,
+        )
     }
 
     pub fn streaming_call<'stub: 'call, 'call, ReqStream>(
@@ -73,6 +64,15 @@ impl<C: Callable> MyServiceClientStub<C> {
     where
         ReqStream: Unpin + Stream<Item = MyRequest> + Send + 'static,
     {
-        BidiCall::new(&self.channel, &STREAMING_CALL_DESC, req_stream)
+        BidiCall::new(
+            &self.channel,
+            MethodDescriptor {
+                method_name: "streaming_call".to_string(),
+                message_encoder: ProtoEncoder::new(),
+                message_decoder: ProtoDecoder::new(),
+                method_type: MethodType::BidiStream,
+            },
+            req_stream,
+        )
     }
 }

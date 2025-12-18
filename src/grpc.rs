@@ -97,7 +97,7 @@ pub trait Callable: Send + Sync {
 
     async fn call<E: Encoder, D: Decoder>(
         &self,
-        descriptor: &MethodDescriptor<E, D>,
+        descriptor: MethodDescriptor<E, D>,
         args: Args,
     ) -> (Self::SendStream<E>, Self::RecvStream<D>);
 }
@@ -109,7 +109,7 @@ impl Callable for Channel {
 
     async fn call<E: Encoder, D: Decoder>(
         &self,
-        descriptor: &MethodDescriptor<E, D>,
+        descriptor: MethodDescriptor<E, D>,
         _args: Args,
     ) -> (Self::SendStream<E>, Self::RecvStream<D>) {
         println!(

@@ -13,7 +13,7 @@ use crate::grpc::{
 
 pub struct UnaryCall<'a, C, Req, Res, ReqMsgView> {
     channel: &'a C,
-    desc: &'a MethodDescriptor<ProtoEncoder<Req>, ProtoDecoder<Res>>,
+    desc: MethodDescriptor<ProtoEncoder<Req>, ProtoDecoder<Res>>,
     req: ReqMsgView,
     args: Args,
 }
@@ -29,7 +29,7 @@ where
 {
     pub fn new(
         channel: &'a C,
-        desc: &'a MethodDescriptor<ProtoEncoder<Req>, ProtoDecoder<Res>>,
+        desc: MethodDescriptor<ProtoEncoder<Req>, ProtoDecoder<Res>>,
         req: ReqMsgView,
     ) -> Self {
         Self {
@@ -82,7 +82,7 @@ where
 
 pub struct BidiCall<'a, C, ReqStream: Stream, Res> {
     channel: &'a C,
-    desc: &'a MethodDescriptor<ProtoEncoder<ReqStream::Item>, ProtoDecoder<Res>>,
+    desc: MethodDescriptor<ProtoEncoder<ReqStream::Item>, ProtoDecoder<Res>>,
     req_stream: ReqStream,
     args: Args,
 }
@@ -90,7 +90,7 @@ pub struct BidiCall<'a, C, ReqStream: Stream, Res> {
 impl<'a, C, ReqStream: Stream, Res> BidiCall<'a, C, ReqStream, Res> {
     pub fn new(
         channel: &'a C,
-        desc: &'a MethodDescriptor<ProtoEncoder<ReqStream::Item>, ProtoDecoder<Res>>,
+        desc: MethodDescriptor<ProtoEncoder<ReqStream::Item>, ProtoDecoder<Res>>,
         req: ReqStream,
     ) -> Self {
         Self {
