@@ -159,7 +159,7 @@ mod interceptor {
         async fn next_msg<'a>(&'a mut self, msg: D::Mut<'a>) -> bool {
             self.delegate.next_msg(msg).await
         }
-        async fn trailers(self) -> Trailers {
+        async fn trailers(&mut self) -> Trailers {
             let mut trailers = self.delegate.trailers().await;
             trailers.status.code = 3;
             trailers

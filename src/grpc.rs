@@ -66,7 +66,7 @@ pub trait SendStream<E: Encoder>: Send + Sync + 'static {
     /// Sends msg on the stream and indicates the client has no further messages
     /// to send.
     // TODO - This should consume self, but that fails without the new trait
-    // solver.
+    // solver.  Also it's not dyn compatible if it takes self.
     fn send_and_close<'a>(&'a mut self, msg: E::View<'a>) -> impl Future<Output = ()> + Send + 'a;
 }
 
@@ -85,7 +85,8 @@ pub trait RecvStream<D: Decoder>: Send + Sync + 'static {
 
     /// Returns the trailers for the stream, consuming the stream and any
     /// unreceived messages preceding the trailers.
-    fn trailers(self) -> impl Future<Output = Trailers> + Send;
+    // TODO - This should consume self, but that makes it not dyn compatible.
+    fn trailers(&mut self) -> impl Future<Output = Trailers> + Send;
 }
 
 pub trait Call<E: Encoder, D: Decoder>: Send + Sync {
@@ -96,6 +97,18 @@ pub trait Call<E: Encoder, D: Decoder>: Send + Sync {
         self,
         descriptor: MethodDescriptor<E, D>,
         args: Args,
+    ) -> impl Future<Output = (Self::SendStream, Self::RecvStream)> + Send;
+}
+
+pub trait InterceptCall<C: Callable, E: Encoder, D: Decoder>: Send + Sync {
+    type SendStream: SendStream<E>;
+    type RecvStream: RecvStream<D>;
+
+    fn start(
+        self,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+        next: &C,
     ) -> impl Future<Output = (Self::SendStream, Self::RecvStream)> + Send;
 }
 
@@ -180,7 +193,7 @@ impl<T: Decoder> RecvStream<T> for ChannelRecvStream<T> {
         true
     }
 
-    async fn trailers(self) -> Trailers {
+    async fn trailers(&mut self) -> Trailers {
         Trailers {
             status: Status::ok(),
         }

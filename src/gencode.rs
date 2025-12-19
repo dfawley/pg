@@ -15,22 +15,6 @@ pub struct MyServiceClientStub<C> {
     channel: C,
 }
 
-/* pub trait MyServiceClient {
-    type UnaryCall<'a, ReqView, Res, ResView>: SharedCall + IntoFuture<Output = Result<Res, Status>>
-    where
-        Self: 'a,
-        ReqView: Send + Sync + 'a,
-        Res: Send + Sync + Default + 'static,
-        ResView: Send + Sync + 'a;
-
-    fn unary_call<'a>(
-        &'a self,
-        req: MyRequestView,
-    ) -> Self::UnaryCall<'a, MyRequestView, MyResponse, MyResponseMut>;
-}
-
- */
-
 impl<C> MyServiceClientStub<C> {
     pub fn new(channel: C) -> Self {
         Self { channel }
