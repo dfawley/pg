@@ -172,6 +172,39 @@ pub trait Call<E: Encoder, D: Decoder>: Send + Sync {
     ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send;
 }
 
+#[async_trait]
+trait DynCall<E: Encoder, D: Decoder>: Send + Sync {
+    async fn start(
+        self: Box<Self>,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+    ) -> (BoxSendStream<E>, BoxRecvStream<D>);
+}
+
+#[async_trait]
+impl<T: Call<E, D>, E: Encoder, D: Decoder> DynCall<E, D> for T {
+    async fn start(
+        self: Box<Self>,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+    ) -> (BoxSendStream<E>, BoxRecvStream<D>) {
+        let (tx, rx) = (*self).start(descriptor, args).await;
+        (BoxSendStream(Box::new(tx)), BoxRecvStream(Box::new(rx)))
+    }
+}
+
+pub struct BoxCall<E: Encoder, D: Decoder>(Box<dyn DynCall<E, D>>);
+
+impl<E: Encoder, D: Decoder> Call<E, D> for BoxCall<E, D> {
+    fn start(
+        self,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+    ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send {
+        self.0.start(descriptor, args)
+    }
+}
+
 pub trait CallInterceptor: Send + Sync {
     fn start<C: Callable, E: Encoder, D: Decoder>(
         &self,
@@ -217,39 +250,6 @@ impl<'a, C: Callable + Clone, I: CallInterceptor + Clone, E: Encoder, D: Decoder
 impl<C: Callable + Clone, I: CallInterceptor + Clone> Callable for Interceptor<C, I> {
     fn call<E: Encoder, D: Decoder>(&self) -> impl Call<E, D> {
         InterceptorCall { interceptor: self }
-    }
-}
-
-#[async_trait]
-trait DynCall<E: Encoder, D: Decoder>: Send + Sync {
-    async fn start(
-        self: Box<Self>,
-        descriptor: MethodDescriptor<E, D>,
-        args: Args,
-    ) -> (BoxSendStream<E>, BoxRecvStream<D>);
-}
-
-#[async_trait]
-impl<T: Call<E, D>, E: Encoder, D: Decoder> DynCall<E, D> for T {
-    async fn start(
-        self: Box<Self>,
-        descriptor: MethodDescriptor<E, D>,
-        args: Args,
-    ) -> (BoxSendStream<E>, BoxRecvStream<D>) {
-        let (tx, rx) = (*self).start(descriptor, args).await;
-        (BoxSendStream(Box::new(tx)), BoxRecvStream(Box::new(rx)))
-    }
-}
-
-pub struct BoxCall<E: Encoder, D: Decoder>(Box<dyn DynCall<E, D>>);
-
-impl<E: Encoder, D: Decoder> Call<E, D> for BoxCall<E, D> {
-    fn start(
-        self,
-        descriptor: MethodDescriptor<E, D>,
-        args: Args,
-    ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send {
-        self.0.start(descriptor, args)
     }
 }
 
