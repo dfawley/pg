@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use crate::grpc::{Callable, InterceptedChannel, Interceptor, MethodDescriptor, MethodType};
+use crate::grpc::{Callable, MethodDescriptor, MethodType};
 use crate::grpc_protobuf::{BidiCall, ProtoDecoder, ProtoEncoder, UnaryCall};
 
 pub mod pb {
@@ -15,23 +15,45 @@ pub struct MyServiceClientStub<C> {
     channel: C,
 }
 
-impl<C: Callable + Clone> MyServiceClientStub<C> {
+/* pub trait MyServiceClient {
+    type UnaryCall<'a, ReqView, Res, ResView>: SharedCall + IntoFuture<Output = Result<Res, Status>>
+    where
+        Self: 'a,
+        ReqView: Send + Sync + 'a,
+        Res: Send + Sync + Default + 'static,
+        ResView: Send + Sync + 'a;
+
+    fn unary_call<'a>(
+        &'a self,
+        req: MyRequestView,
+    ) -> Self::UnaryCall<'a, MyRequestView, MyResponse, MyResponseMut>;
+}
+
+ */
+
+impl<C> MyServiceClientStub<C> {
     pub fn new(channel: C) -> Self {
         Self { channel }
     }
-
-    pub fn with_interceptor<I: Interceptor>(
-        &self,
-        interceptor: I,
-    ) -> MyServiceClientStub<InterceptedChannel<C, I>> {
-        MyServiceClientStub {
-            channel: InterceptedChannel {
-                inner: self.channel.clone(),
-                interceptor,
-            },
-        }
-    }
 }
+
+static UNARY_CALL_DESC: LazyLock<
+    MethodDescriptor<ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>>,
+> = LazyLock::new(|| MethodDescriptor {
+    method_name: "unary_call".to_string(),
+    message_encoder: ProtoEncoder::new(),
+    message_decoder: ProtoDecoder::new(),
+    method_type: MethodType::Unary,
+});
+
+static STREAMING_CALL_DESC: LazyLock<
+    MethodDescriptor<ProtoEncoder<MyRequest>, ProtoDecoder<MyResponse>>,
+> = LazyLock::new(|| MethodDescriptor {
+    method_name: "streaming_call".to_string(),
+    message_encoder: ProtoEncoder::new(),
+    message_decoder: ProtoDecoder::new(),
+    method_type: MethodType::BidiStream,
+});
 
 impl<C: Callable> MyServiceClientStub<C> {
     pub fn unary_call<'stub: 'call, 'call, ReqMsgView>(
@@ -41,13 +63,7 @@ impl<C: Callable> MyServiceClientStub<C> {
     where
         ReqMsgView: AsView<Proxied = MyRequest> + Send + Sync + 'call,
     {
-        let desc = MethodDescriptor {
-            method_name: "unary_call".to_string(),
-            message_encoder: ProtoEncoder::new(),
-            message_decoder: ProtoDecoder::new(),
-            method_type: MethodType::Unary,
-        };
-        UnaryCall::new(&self.channel, desc, req)
+        UnaryCall::new(&self.channel, &UNARY_CALL_DESC, req)
     }
 
     pub fn streaming_call<'stub: 'call, 'call, ReqStream>(
@@ -57,12 +73,6 @@ impl<C: Callable> MyServiceClientStub<C> {
     where
         ReqStream: Unpin + Stream<Item = MyRequest> + Send + 'static,
     {
-        let desc = MethodDescriptor {
-            method_name: "streaming_call".to_string(),
-            message_encoder: ProtoEncoder::new(),
-            message_decoder: ProtoDecoder::new(),
-            method_type: MethodType::BidiStream,
-        };
-        BidiCall::new(&self.channel, desc, req_stream)
+        BidiCall::new(&self.channel, &STREAMING_CALL_DESC, req_stream)
     }
 }

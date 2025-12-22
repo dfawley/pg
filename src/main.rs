@@ -6,29 +6,28 @@ mod grpc_protobuf;
 
 use async_stream::stream;
 use futures_util::StreamExt;
-use std::time::Duration;
-
-use crate::interceptor::CallInterceptor;
 use gencode::MyServiceClientStub;
 use gencode::pb::*;
 use grpc::Callable;
 use grpc::Channel;
 use grpc_protobuf::SharedCall;
 use protobuf::proto;
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() {
     let channel = Channel::default();
     let client = MyServiceClientStub::new(channel.clone());
-    unary(&client).await;
-    bidi(&client).await;
+    unary(client.clone()).await;
+    bidi(client.clone()).await;
 
-    let client = client.with_interceptor(CallInterceptor {});
-    unary(&client).await;
-    bidi(&client).await;
+    let wrap_chan = interceptor::CallInterceptor { inner: channel };
+    let client = MyServiceClientStub::new(wrap_chan);
+    unary(client.clone()).await;
+    bidi(client.clone()).await;
 }
 
-async fn bidi<C: Callable>(client: &MyServiceClientStub<C>) {
+async fn bidi<C: Callable>(client: MyServiceClientStub<C>) {
     {
         let requests = Box::pin(stream! {
             yield proto!(MyRequest { query: 1 });
@@ -41,7 +40,7 @@ async fn bidi<C: Callable>(client: &MyServiceClientStub<C>) {
     }
 }
 
-async fn unary<C: Callable>(client: &MyServiceClientStub<C>) {
+async fn unary<C: Callable>(client: MyServiceClientStub<C>) {
     {
         // Using an owned message for request and response:
         let res = client.unary_call(proto!(MyRequest { query: 3 })).await;
@@ -95,7 +94,6 @@ mod interceptor {
     use crate::grpc::Decoder;
     use crate::grpc::Encoder;
     use crate::grpc::Headers;
-    use crate::grpc::Interceptor;
     use crate::grpc::MethodDescriptor;
     use crate::grpc::RecvStream;
     use crate::grpc::SendStream;
@@ -103,40 +101,42 @@ mod interceptor {
     use async_trait::async_trait;
 
     #[derive(Clone)]
-    pub struct CallableInterceptor<C> {
+    pub struct CallInterceptor<C> {
         pub inner: C,
     }
 
-    pub struct CallInterceptor {}
-
     #[async_trait]
-    impl Interceptor for CallInterceptor {
-        type CallSendStream<C: Callable, E: Encoder> = C::SendStream<E>;
-        type CallRecvStream<C: Callable, D: Decoder> = RecvInterceptor<C::RecvStream<D>>;
-
-        async fn intercept<E: Encoder, D: Decoder, C: Callable>(
-            &self,
-            descriptor: MethodDescriptor<E, D>,
-            args: Args,
-            next: &C,
-        ) -> (Self::CallSendStream<C, E>, Self::CallRecvStream<C, D>) {
-            let (tx, rx) = next.call(descriptor, args).await;
-            (tx, RecvInterceptor { delegate: rx })
-        }
-    }
-
-    #[async_trait]
-    impl<C: Callable> Callable for CallableInterceptor<C> {
-        type SendStream<E: Encoder> = C::SendStream<E>; // Don't intercept sending.
+    impl<C: Callable> Callable for CallInterceptor<C> {
+        type SendStream<E: Encoder> = SendInterceptor<C::SendStream<E>>;
         type RecvStream<D: Decoder> = RecvInterceptor<C::RecvStream<D>>;
 
         async fn call<E: Encoder, D: Decoder>(
             &self,
-            descriptor: MethodDescriptor<E, D>,
+            descriptor: &MethodDescriptor<E, D>,
             args: Args,
         ) -> (Self::SendStream<E>, Self::RecvStream<D>) {
             let (tx, rx) = self.inner.call(descriptor, args).await;
-            (tx, RecvInterceptor { delegate: rx })
+            (
+                SendInterceptor { delegate: tx },
+                RecvInterceptor { delegate: rx },
+            )
+        }
+    }
+
+    pub struct SendInterceptor<Delegate> {
+        delegate: Delegate,
+    }
+
+    #[async_trait]
+    impl<E: Encoder, Delegate: SendStream<E>> SendStream<E> for SendInterceptor<Delegate> {
+        async fn send_msg(&self, msg: E::View<'_>) -> bool {
+            self.delegate.send_msg(msg).await
+        }
+
+        /// Sends msg on the stream and indicates the client has no further messages
+        /// to send.
+        async fn send_and_close(self, msg: E::View<'_>) {
+            self.delegate.send_and_close(msg).await
         }
     }
 
@@ -145,9 +145,7 @@ mod interceptor {
     }
 
     #[async_trait]
-    impl<Delegate: RecvStream> RecvStream for RecvInterceptor<Delegate> {
-        type Message = Delegate::Message;
-
+    impl<D: Decoder, Delegate: RecvStream<D>> RecvStream<D> for RecvInterceptor<Delegate> {
         async fn headers(&mut self) -> Option<Headers> {
             let headers = self.delegate.headers().await;
             if headers.is_some() {
@@ -155,11 +153,9 @@ mod interceptor {
             }
             None
         }
-
-        async fn next_msg(&mut self) -> Option<Self::Message> {
-            self.delegate.next_msg().await
+        async fn next_msg(&mut self, msg: D::Mut<'_>) -> bool {
+            self.delegate.next_msg(msg).await
         }
-
         async fn trailers(self) -> Trailers {
             let mut trailers = self.delegate.trailers().await;
             trailers.status.code = 3;
