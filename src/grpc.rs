@@ -1,6 +1,10 @@
+use std::any::Any;
 use std::fmt::Debug;
+use std::marker::PhantomData;
 use std::sync::Mutex;
 use std::time;
+
+use async_trait::async_trait;
 
 use crate::gencode::pb::*;
 
@@ -25,7 +29,7 @@ pub struct Trailers {
 }
 
 #[derive(Clone, Default)]
-pub struct Channel {}
+pub struct Channel;
 
 #[derive(Debug)]
 pub enum MethodType {
@@ -42,13 +46,13 @@ pub struct MethodDescriptor<E, D> {
     pub method_type: MethodType,
 }
 
-pub trait Encoder: Send + Sync + Clone + 'static {
+pub trait Encoder: Any + Send + Sync + Clone + 'static {
     type View<'a>: Send + Sync;
 
     fn encode(&self, item: Self::View<'_>) -> Vec<Vec<u8>>;
 }
 
-pub trait Decoder: Send + Sync + Clone + 'static {
+pub trait Decoder: Any + Send + Sync + Clone + 'static {
     type Mut<'a>: Send + Sync;
 
     fn decode(&self, data: Vec<Vec<u8>>, item: Self::Mut<'_>);
@@ -70,6 +74,35 @@ pub trait SendStream<E: Encoder>: Send + Sync + 'static {
     fn send_and_close<'a>(&'a mut self, msg: E::View<'a>) -> impl Future<Output = ()> + Send + 'a;
 }
 
+#[async_trait]
+trait DynSendStream<E: Encoder>: Send + Sync + 'static {
+    async fn send_msg<'a>(&'a mut self, msg: E::View<'a>) -> bool;
+    // TODO - This should consume self, but then SendStream::send_and_close
+    // can't be impl'd for DynSendStream because would be consumed.
+    async fn send_and_close<'a>(&'a mut self, msg: E::View<'a>);
+}
+
+pub struct BoxSendStream<E>(Box<dyn DynSendStream<E>>);
+
+#[async_trait]
+impl<E: Encoder, T: SendStream<E>> DynSendStream<E> for T {
+    async fn send_msg<'a>(&'a mut self, msg: E::View<'a>) -> bool {
+        SendStream::send_msg(self, msg).await
+    }
+    async fn send_and_close<'a>(&'a mut self, msg: E::View<'a>) {
+        SendStream::send_and_close(self, msg).await;
+    }
+}
+
+impl<E: Encoder> SendStream<E> for BoxSendStream<E> {
+    fn send_msg<'a>(&'a mut self, msg: E::View<'a>) -> impl Future<Output = bool> + Send + 'a {
+        self.0.send_msg(msg)
+    }
+    fn send_and_close<'a>(&'a mut self, msg: E::View<'a>) -> impl Future<Output = ()> + Send + 'a {
+        self.0.send_and_close(msg)
+    }
+}
+
 /// RecvStream represents the receiving side of a client stream.  Dropping the
 /// RecvStream results in early RPC cancellation if the server has not already
 /// terminated the stream first.
@@ -85,50 +118,148 @@ pub trait RecvStream<D: Decoder>: Send + Sync + 'static {
 
     /// Returns the trailers for the stream, consuming the stream and any
     /// unreceived messages preceding the trailers.
-    // TODO - This should consume self, but that makes it not dyn compatible.
-    fn trailers(&mut self) -> impl Future<Output = Trailers> + Send;
+    fn trailers(self) -> impl Future<Output = Trailers> + Send;
 }
 
-pub trait Call<E: Encoder, D: Decoder>: Send + Sync {
-    type SendStream: SendStream<E>;
-    type RecvStream: RecvStream<D>;
-
-    fn start(
-        self,
-        descriptor: MethodDescriptor<E, D>,
-        args: Args,
-    ) -> impl Future<Output = (Self::SendStream, Self::RecvStream)> + Send;
+#[async_trait]
+trait DynRecvStream<D: Decoder>: Send + Sync {
+    async fn headers(&mut self) -> Option<Headers>;
+    async fn next_msg<'a>(&'a mut self, msg: D::Mut<'a>) -> bool;
+    async fn trailers(self: Box<Self>) -> Trailers;
 }
 
-pub trait InterceptCall<C: Callable, E: Encoder, D: Decoder>: Send + Sync {
-    type SendStream: SendStream<E>;
-    type RecvStream: RecvStream<D>;
+pub struct BoxRecvStream<D>(Box<dyn DynRecvStream<D>>);
 
-    fn start(
-        self,
-        descriptor: MethodDescriptor<E, D>,
-        args: Args,
-        next: &C,
-    ) -> impl Future<Output = (Self::SendStream, Self::RecvStream)> + Send;
+#[async_trait]
+impl<D: Decoder, T: RecvStream<D>> DynRecvStream<D> for T {
+    async fn headers(&mut self) -> Option<Headers> {
+        RecvStream::headers(self).await
+    }
+    async fn next_msg<'a>(&'a mut self, msg: D::Mut<'a>) -> bool {
+        RecvStream::next_msg(self, msg).await
+    }
+    async fn trailers(self: Box<Self>) -> Trailers {
+        RecvStream::trailers(*self).await
+    }
+}
+
+impl<D: Decoder> RecvStream<D> for BoxRecvStream<D> {
+    fn headers(&mut self) -> impl Future<Output = Option<Headers>> + Send {
+        self.0.headers()
+    }
+
+    fn next_msg<'a>(
+        &'a mut self,
+        msg: <D as Decoder>::Mut<'a>,
+    ) -> impl Future<Output = bool> + Send + 'a {
+        self.0.next_msg(msg)
+    }
+
+    fn trailers(self) -> impl Future<Output = Trailers> + Send {
+        Box::new(self.0).trailers()
+    }
 }
 
 pub trait Callable: Send + Sync {
-    type Out<E: Encoder, D: Decoder>: Call<E, D>;
+    fn call<E: Encoder, D: Decoder>(&self) -> impl Call<E, D>;
+}
 
-    fn call<E: Encoder, D: Decoder>(&self) -> Self::Out<E, D>;
+pub trait Call<E: Encoder, D: Decoder>: Send + Sync {
+    fn start(
+        self,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+    ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send;
+}
+
+pub trait CallInterceptor: Send + Sync {
+    fn start<C: Callable, E: Encoder, D: Decoder>(
+        &self,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+        next: &C,
+    ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send;
+}
+
+#[derive(Clone)]
+pub struct Interceptor<C: Clone, I: Clone> {
+    callable: C,
+    call_interceptor: I,
+}
+
+impl<C: Clone, I: Clone> Interceptor<C, I> {
+    pub fn new(callable: C, call_interceptor: I) -> Self {
+        Self {
+            callable,
+            call_interceptor,
+        }
+    }
+}
+
+struct InterceptorCall<'a, C: Clone, I: Clone> {
+    interceptor: &'a Interceptor<C, I>,
+}
+
+impl<'a, C: Callable + Clone, I: CallInterceptor + Clone, E: Encoder, D: Decoder> Call<E, D>
+    for InterceptorCall<'a, C, I>
+{
+    fn start(
+        self,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+    ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send {
+        self.interceptor
+            .call_interceptor
+            .start(descriptor, args, &self.interceptor.callable)
+    }
+}
+
+impl<C: Callable + Clone, I: CallInterceptor + Clone> Callable for Interceptor<C, I> {
+    fn call<E: Encoder, D: Decoder>(&self) -> impl Call<E, D> {
+        InterceptorCall { interceptor: self }
+    }
+}
+
+#[async_trait]
+trait DynCall<E: Encoder, D: Decoder>: Send + Sync {
+    async fn start(
+        self: Box<Self>,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+    ) -> (BoxSendStream<E>, BoxRecvStream<D>);
+}
+
+#[async_trait]
+impl<T: Call<E, D>, E: Encoder, D: Decoder> DynCall<E, D> for T {
+    async fn start(
+        self: Box<Self>,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+    ) -> (BoxSendStream<E>, BoxRecvStream<D>) {
+        Box::new(self).start(descriptor, args).await
+    }
+}
+
+pub struct BoxCall<E: Encoder, D: Decoder>(Box<dyn DynCall<E, D>>);
+
+impl<E: Encoder, D: Decoder> Call<E, D> for BoxCall<E, D> {
+    fn start(
+        self,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+    ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send {
+        self.0.start(descriptor, args)
+    }
 }
 
 pub struct ChannelCall;
 
 impl<E: Encoder, D: Decoder> Call<E, D> for ChannelCall {
-    type SendStream = ChannelSendStream<E>;
-    type RecvStream = ChannelRecvStream<D>;
-
     async fn start(
         self,
         descriptor: MethodDescriptor<E, D>,
         _args: Args,
-    ) -> (Self::SendStream, Self::RecvStream) {
+    ) -> (impl SendStream<E>, impl RecvStream<D>) {
         println!(
             "starting call for {:?} ({:?})",
             descriptor.method_name, descriptor.method_type
@@ -146,9 +277,7 @@ impl<E: Encoder, D: Decoder> Call<E, D> for ChannelCall {
 }
 
 impl Callable for Channel {
-    type Out<E: Encoder, D: Decoder> = ChannelCall;
-
-    fn call<E: Encoder, D: Decoder>(&self) -> Self::Out<E, D> {
+    fn call<E: Encoder, D: Decoder>(&self) -> impl Call<E, D> {
         ChannelCall {}
     }
 }
@@ -193,7 +322,7 @@ impl<T: Decoder> RecvStream<T> for ChannelRecvStream<T> {
         true
     }
 
-    async fn trailers(&mut self) -> Trailers {
+    async fn trailers(self) -> Trailers {
         Trailers {
             status: Status::ok(),
         }
