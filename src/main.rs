@@ -24,10 +24,8 @@ async fn main() {
     bidi(client.clone()).await;
 
     let wrap_chan = Interceptor::new(channel, interceptor::FailAllInterceptCall {});
-    /*
-        let wrap_chan = interceptor::FailAllInterceptor { inner: channel };
-        let wrap_chan = interceptor::PrintReqInterceptor { inner: wrap_chan };
-    */
+    let wrap_chan = Interceptor::new(wrap_chan, interceptor::PrintReqInterceptor {});
+
     let client = MyServiceClientStub::new(wrap_chan);
     unary(client.clone()).await;
     bidi(client.clone()).await;

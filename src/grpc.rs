@@ -236,7 +236,8 @@ impl<T: Call<E, D>, E: Encoder, D: Decoder> DynCall<E, D> for T {
         descriptor: MethodDescriptor<E, D>,
         args: Args,
     ) -> (BoxSendStream<E>, BoxRecvStream<D>) {
-        Box::new(self).start(descriptor, args).await
+        let (tx, rx) = (*self).start(descriptor, args).await;
+        (BoxSendStream(Box::new(tx)), BoxRecvStream(Box::new(rx)))
     }
 }
 
