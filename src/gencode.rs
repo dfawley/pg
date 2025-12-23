@@ -1,5 +1,3 @@
-use std::sync::LazyLock;
-
 use crate::grpc::{Callable, MethodDescriptor, MethodType};
 use crate::grpc_protobuf::{BidiCall, ProtoDecoder, ProtoEncoder, UnaryCall};
 
@@ -25,7 +23,7 @@ impl<C: Callable> MyServiceClientStub<C> {
     pub fn unary_call<'stub: 'call, 'call, ReqMsgView>(
         &'stub self,
         req: ReqMsgView,
-    ) -> UnaryCall<'call, C, MyRequest, MyResponse, ReqMsgView>
+    ) -> UnaryCall<'call, &'stub C, MyRequest, MyResponse, ReqMsgView>
     where
         ReqMsgView: AsView<Proxied = MyRequest> + Send + Sync + 'call,
     {

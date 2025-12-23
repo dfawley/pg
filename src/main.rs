@@ -13,6 +13,7 @@ use grpc::Channel;
 use grpc_protobuf::SharedCall;
 use protobuf::proto;
 use std::time::Duration;
+use tokio::sync::oneshot;
 
 use crate::grpc::Interceptor;
 
@@ -22,6 +23,7 @@ async fn main() {
     let client = MyServiceClientStub::new(channel.clone());
     unary(client.clone()).await;
     bidi(client.clone()).await;
+    headers_example(client.clone()).await;
 
     let wrap_chan = Interceptor::new(channel, interceptor::FailAllInterceptCall {});
     let wrap_chan = Interceptor::new(wrap_chan, interceptor::PrintReqInterceptor {});
@@ -93,36 +95,103 @@ async fn unary<C: Callable>(client: MyServiceClientStub<C>) {
     }
 }
 
+async fn headers_example<C: Callable>(client: MyServiceClientStub<C>) {
+    {
+        let (tx, rx) = oneshot::channel();
+        let i = header_reader::HeaderReader::new(tx);
+        let res = client
+            .unary_call(proto!(MyRequest { query: 1 }))
+            .with_interceptor(i)
+            .await;
+        match rx.await {
+            Ok(v) => println!("saw headers: {:?}", v),
+            Err(_) => println!("RPC finished as trailers-only"),
+        }
+        println!("Response: {:?}", res);
+    }
+}
+
+mod header_reader {
+    use std::mem::take;
+
+    use tokio::sync::oneshot::Sender;
+
+    use crate::grpc::*;
+
+    pub struct HeaderReader {
+        tx: Sender<Headers>,
+    }
+
+    impl HeaderReader {
+        pub fn new(tx: Sender<Headers>) -> Self {
+            Self { tx }
+        }
+    }
+
+    impl CallInterceptorOnce for HeaderReader {
+        async fn start<C: CallableOnce, E: Encoder, D: Decoder>(
+            self,
+            descriptor: MethodDescriptor<E, D>,
+            args: Args,
+            next: C,
+        ) -> (impl SendStream<E>, impl RecvStream<D>) {
+            let (tx, delegate) = next.call().start(descriptor, args).await;
+            (
+                tx,
+                HeaderReaderRecvStream {
+                    tx: Some(self.tx),
+                    delegate,
+                },
+            )
+        }
+    }
+
+    pub struct HeaderReaderRecvStream<Delegate> {
+        tx: Option<Sender<Headers>>,
+        delegate: Delegate,
+    }
+
+    impl<D: Decoder, Delegate: RecvStream<D>> RecvStream<D> for HeaderReaderRecvStream<Delegate> {
+        async fn headers(&mut self) -> Option<Headers> {
+            let headers = self.delegate.headers().await;
+            if self.tx.is_some()
+                && let Some(h) = headers.clone()
+            {
+                let tx = take(&mut self.tx).unwrap();
+                tx.send(h);
+            }
+            headers
+        }
+        async fn next_msg<'a>(&'a mut self, msg: D::Mut<'a>) -> bool {
+            RecvStream::headers(self).await;
+            self.delegate.next_msg(msg).await
+        }
+        async fn trailers(mut self) -> Trailers {
+            RecvStream::headers(&mut self).await;
+            self.delegate.trailers().await
+        }
+    }
+}
+
 mod interceptor {
     use std::any::TypeId;
     use std::marker::PhantomData;
 
     use crate::gencode::pb::MyRequest;
     use crate::gencode::pb::MyRequestView;
-    use crate::grpc::Args;
-    use crate::grpc::Call;
-    use crate::grpc::CallInterceptor;
-    use crate::grpc::Callable;
-    use crate::grpc::Decoder;
-    use crate::grpc::Encoder;
-    use crate::grpc::Headers;
-    use crate::grpc::MethodDescriptor;
-    use crate::grpc::RecvStream;
-    use crate::grpc::SendStream;
-    use crate::grpc::Trailers;
+    use crate::grpc::*;
     use crate::grpc_protobuf::ProtoEncoder;
 
     #[derive(Clone)]
     pub struct FailAllInterceptCall {}
 
     impl CallInterceptor for FailAllInterceptCall {
-        async fn start<C: Callable, E: Encoder, D: Decoder>(
+        async fn start<C: CallableOnce, E: Encoder, D: Decoder>(
             &self,
             descriptor: MethodDescriptor<E, D>,
             args: Args,
-            next: &C,
+            next: C,
         ) -> (impl SendStream<E>, impl RecvStream<D>) {
-            let encoder_type_id = TypeId::of::<ProtoEncoder<MyRequest>>();
             let (tx, rx) = next.call().start(descriptor, args).await;
             (tx, FailingRecvStreamInterceptor { delegate: rx })
         }
@@ -150,11 +219,11 @@ mod interceptor {
     pub struct PrintReqInterceptor {}
 
     impl CallInterceptor for PrintReqInterceptor {
-        async fn start<C: Callable, E: Encoder, D: Decoder>(
+        async fn start<C: CallableOnce, E: Encoder, D: Decoder>(
             &self,
             descriptor: MethodDescriptor<E, D>,
             args: Args,
-            next: &C,
+            next: C,
         ) -> (impl SendStream<E>, impl RecvStream<D>) {
             let (tx, rx) = next.call().start(descriptor, args).await;
             (

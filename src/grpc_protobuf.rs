@@ -5,22 +5,23 @@ use protobuf::{AsMut, AsView, ClearAndParse, Message, Proxied, Serialize};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::time::Duration;
-use tokio::task;
 
 use crate::grpc::{
-    Args, Call as _, Callable, Decoder, Encoder, MethodDescriptor, RecvStream, SendStream, Status,
+    Args, Call as _, CallInterceptorOnce, Callable, CallableOnce, Decoder, Encoder,
+    InterceptorOnce, MethodDescriptor, RecvStream, SendStream, Status,
 };
 
 pub struct UnaryCall<'a, C, Req, Res, ReqMsgView> {
-    channel: &'a C,
+    channel: C,
     desc: MethodDescriptor<ProtoEncoder<Req>, ProtoDecoder<Res>>,
     req: ReqMsgView,
     args: Args,
+    _phantom: PhantomData<&'a ()>,
 }
 
 impl<'a, C, Req, Res, ReqMsgView> UnaryCall<'a, C, Req, Res, ReqMsgView>
 where
-    C: Callable,
+    C: CallableOnce,
     Req: Message + 'static,
     Res: Message + 'static,
     ReqMsgView: AsView<Proxied = Req> + Send + 'a,
@@ -28,7 +29,7 @@ where
     for<'b> Res::Mut<'b>: Send + ClearAndParse,
 {
     pub fn new(
-        channel: &'a C,
+        channel: C,
         desc: MethodDescriptor<ProtoEncoder<Req>, ProtoDecoder<Res>>,
         req: ReqMsgView,
     ) -> Self {
@@ -37,6 +38,20 @@ where
             req,
             desc,
             args: Default::default(),
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn with_interceptor<I: CallInterceptorOnce>(
+        self,
+        interceptor: I,
+    ) -> UnaryCall<'a, InterceptorOnce<C, I>, Req, Res, ReqMsgView> {
+        UnaryCall {
+            channel: InterceptorOnce::new(self.channel, interceptor),
+            desc: self.desc,
+            req: self.req,
+            args: self.args,
+            _phantom: PhantomData,
         }
     }
 
@@ -53,7 +68,7 @@ where
 
 impl<'a, C, Req, Res, ReqMsgView> IntoFuture for UnaryCall<'a, C, Req, Res, ReqMsgView>
 where
-    C: Callable,
+    C: CallableOnce + 'a,
     Req: Message + 'static,
     Res: Message + 'static,
     ReqMsgView: AsView<Proxied = Req> + Send + 'a,
