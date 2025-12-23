@@ -2,7 +2,6 @@
 
 mod gencode;
 mod grpc;
-mod grpc_protobuf;
 
 use async_stream::stream;
 use futures_util::StreamExt;
@@ -10,12 +9,11 @@ use gencode::MyServiceClientStub;
 use gencode::pb::*;
 use grpc::Callable;
 use grpc::Channel;
-use grpc_protobuf::SharedCall;
+use grpc::protobuf::SharedCall;
 use protobuf::proto;
 use std::time::Duration;
-use tokio::sync::oneshot;
 
-use crate::grpc::Interceptor;
+use grpc::CallableInterceptor;
 
 #[tokio::main]
 async fn main() {
@@ -25,8 +23,8 @@ async fn main() {
     bidi(client.clone()).await;
     headers_example(client.clone()).await;
 
-    let wrap_chan = Interceptor::new(channel, interceptor::FailAllInterceptCall {});
-    let wrap_chan = Interceptor::new(wrap_chan, interceptor::PrintReqInterceptor {});
+    let wrap_chan = CallableInterceptor::new(channel, interceptor::FailAllInterceptCall {});
+    let wrap_chan = CallableInterceptor::new(wrap_chan, interceptor::PrintReqInterceptor {});
 
     let client = MyServiceClientStub::new(wrap_chan);
     unary(client.clone()).await;
@@ -97,8 +95,7 @@ async fn unary<C: Callable>(client: MyServiceClientStub<C>) {
 
 async fn headers_example<C: Callable>(client: MyServiceClientStub<C>) {
     {
-        let (tx, rx) = oneshot::channel();
-        let i = header_reader::HeaderReader::new(tx);
+        let (i, rx) = header_reader::HeaderReader::new();
         let res = client
             .unary_call(proto!(MyRequest { query: 1 }))
             .with_interceptor(i)
@@ -112,9 +109,7 @@ async fn headers_example<C: Callable>(client: MyServiceClientStub<C>) {
 }
 
 mod header_reader {
-    use std::mem::take;
-
-    use tokio::sync::oneshot::Sender;
+    use tokio::sync::oneshot::{self, Receiver, Sender};
 
     use crate::grpc::*;
 
@@ -123,8 +118,9 @@ mod header_reader {
     }
 
     impl HeaderReader {
-        pub fn new(tx: Sender<Headers>) -> Self {
-            Self { tx }
+        pub fn new() -> (Self, Receiver<Headers>) {
+            let (tx, rx) = oneshot::channel();
+            (Self { tx }, rx)
         }
     }
 
@@ -154,11 +150,10 @@ mod header_reader {
     impl<D: Decoder, Delegate: RecvStream<D>> RecvStream<D> for HeaderReaderRecvStream<Delegate> {
         async fn headers(&mut self) -> Option<Headers> {
             let headers = self.delegate.headers().await;
-            if self.tx.is_some()
+            if let Some(tx) = self.tx.take()
                 && let Some(h) = headers.clone()
             {
-                let tx = take(&mut self.tx).unwrap();
-                tx.send(h);
+                tx.send(h).unwrap();
             }
             headers
         }
@@ -179,9 +174,10 @@ mod interceptor {
 
     use crate::gencode::pb::MyRequest;
     use crate::gencode::pb::MyRequestView;
+    use crate::grpc::protobuf::ProtoEncoder;
     use crate::grpc::*;
-    use crate::grpc_protobuf::ProtoEncoder;
 
+    // Note: must have Clone so corresponding wrapped channel can impl Clone.
     #[derive(Clone)]
     pub struct FailAllInterceptCall {}
 

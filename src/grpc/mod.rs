@@ -8,6 +8,8 @@ pub use intercept::*;
 mod channel;
 pub use channel::*;
 
+pub mod protobuf;
+
 #[derive(Clone, Debug)]
 pub struct Status {
     pub code: i32,
@@ -40,6 +42,7 @@ pub enum MethodType {
     BidiStream,
 }
 
+#[derive(Debug)]
 pub struct MethodDescriptor<E, D> {
     pub method_name: String,
     pub message_encoder: E,
@@ -47,12 +50,14 @@ pub struct MethodDescriptor<E, D> {
     pub method_type: MethodType,
 }
 
+/// Converts the input message view into bytes.
 pub trait Encoder: Any + Send + Sync + Clone + 'static {
     type View<'a>: Send + Sync;
 
     fn encode(&self, item: Self::View<'_>) -> Vec<Vec<u8>>;
 }
 
+/// Converts the input bytes and sets the mutable message view.
 pub trait Decoder: Any + Send + Sync + Clone + 'static {
     type Mut<'a>: Send + Sync;
 
@@ -93,20 +98,19 @@ pub trait RecvStream<D: Decoder>: Send + Sync + 'static {
     fn trailers(self) -> impl Future<Output = Trailers> + Send;
 }
 
+/// Callable begins the dispatching of an RPC.
 pub trait Callable: Send + Sync {
+    /// Creates a parameterized call that can be invoked later.
     fn call<'a, E: Encoder, D: Decoder>(&'a self) -> impl Call<E, D> + 'a;
 }
 
+/// CallableOnce is like Callable, but consumes the receiver to limit it to a
+/// single call.  This is particularly relevant for pairing with
+/// CallInterceptorOnce usages.  It is blanket implemented on Callable
+/// references.
 pub trait CallableOnce: Send + Sync {
+    /// Creates a parameterized call that can be invoked later.
     fn call<E: Encoder, D: Decoder>(self) -> impl Call<E, D>;
-}
-
-pub trait Call<E: Encoder, D: Decoder>: Send + Sync {
-    fn start(
-        self,
-        descriptor: MethodDescriptor<E, D>,
-        args: Args,
-    ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send;
 }
 
 impl<'a, C: Callable> CallableOnce for &'a C {
@@ -115,7 +119,22 @@ impl<'a, C: Callable> CallableOnce for &'a C {
     }
 }
 
+/// Call is used to actually start an RPC.
+pub trait Call<E: Encoder, D: Decoder>: Send + Sync {
+    /// Starts the call, consuming the Call and returning the send and receive
+    /// streams to interact with the RPC.  The returned future may block until
+    /// sufficient resources are available to allow the call to start.
+    fn start(
+        self,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+    ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send;
+}
+
+/// CallInterceptor allows intercepting a Call.
 pub trait CallInterceptor: Send + Sync {
+    /// Starts a call.  Implementations should generally use next to create and
+    /// start a Call whose streams are optionally wrapped before being returned.
     fn start<C: CallableOnce, E: Encoder, D: Decoder>(
         &self,
         descriptor: MethodDescriptor<E, D>,
@@ -124,6 +143,7 @@ pub trait CallInterceptor: Send + Sync {
     ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send;
 }
 
+/// CallInterceptorOnce allows intercepting a Call one time only.
 pub trait CallInterceptorOnce: Send + Sync {
     fn start<C: CallableOnce, E: Encoder, D: Decoder>(
         self,

@@ -1,5 +1,5 @@
+use crate::grpc::protobuf::{BidiCall, ProtoDecoder, ProtoEncoder, UnaryCall};
 use crate::grpc::{Callable, MethodDescriptor, MethodType};
-use crate::grpc_protobuf::{BidiCall, ProtoDecoder, ProtoEncoder, UnaryCall};
 
 pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/protobuf_generated/generated.rs"));
