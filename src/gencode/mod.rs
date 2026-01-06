@@ -1,4 +1,4 @@
-use crate::grpc::{Call, MethodDescriptor, MethodType};
+use crate::grpc::{Call, CallOnce, MethodDescriptor, MethodType};
 use crate::grpc_protobuf::{BidiCall, ProtoDecoder, ProtoEncoder, UnaryCall};
 
 pub mod pb {
@@ -23,7 +23,7 @@ impl<C: Call> MyServiceClientStub<C> {
     pub fn unary_call<'stub: 'call, 'call, ReqMsgView>(
         &'stub self,
         req: ReqMsgView,
-    ) -> UnaryCall<'call, &'stub C, MyRequest, MyResponse, ReqMsgView>
+    ) -> UnaryCall<'call, impl CallOnce, MyRequest, MyResponse, ReqMsgView>
     where
         ReqMsgView: AsView<Proxied = MyRequest> + Send + Sync + 'call,
     {
@@ -42,7 +42,7 @@ impl<C: Call> MyServiceClientStub<C> {
     pub fn streaming_call<'stub: 'call, 'call, ReqStream>(
         &'stub self,
         req_stream: ReqStream,
-    ) -> BidiCall<'call, C, ReqStream, MyResponse>
+    ) -> BidiCall<'call, impl CallOnce, ReqStream, MyResponse>
     where
         ReqStream: Unpin + Stream<Item = MyRequest> + Send + 'static,
     {

@@ -1,22 +1,22 @@
-#![allow(unused)]
-
 mod gencode;
 mod grpc;
 mod grpc_protobuf;
 
 use async_stream::stream;
-use futures_util::StreamExt;
-use gencode::MyServiceClientStub;
-use gencode::pb::*;
-use grpc::Call;
-use grpc::Channel;
-use grpc_protobuf::SharedCall;
+use futures_util::StreamExt as _;
 use protobuf::proto;
 use std::time::Duration;
 
-use grpc::Interceptor;
+use gencode::MyServiceClientStub;
+use gencode::pb::*;
+use grpc::Call;
+use grpc::CallExt as _;
+use grpc::Channel;
+use grpc_protobuf::SharedCall;
 
-use crate::grpc::CallExt;
+// User-defined interceptors.
+use header_reader::*;
+use interceptor::*;
 
 #[tokio::main]
 async fn main() {
@@ -27,25 +27,13 @@ async fn main() {
     headers_example(&client).await;
 
     let wrap_chan = channel
-        .with_interceptor(interceptor::FailAllInterceptCall {})
-        .with_interceptor(interceptor::PrintReqInterceptor {});
+        .with_interceptor(FailStatusInterceptor {})
+        .with_interceptor(PrintReqInterceptor {});
 
     let client = MyServiceClientStub::new(wrap_chan);
     unary(&client).await;
     bidi(&client).await;
-}
-
-async fn bidi<C: Call>(client: &MyServiceClientStub<C>) {
-    {
-        let requests = Box::pin(stream! {
-            yield proto!(MyRequest { query: 10 });
-            yield proto!(MyRequest { query: 20 });
-        });
-        let mut res = client.streaming_call(requests).await;
-        while let Some(res) = res.next().await {
-            println!("stream: {:?}", res);
-        }
-    }
+    headers_example(&client).await;
 }
 
 async fn unary<C: Call>(client: &MyServiceClientStub<C>) {
@@ -97,9 +85,22 @@ async fn unary<C: Call>(client: &MyServiceClientStub<C>) {
     }
 }
 
+async fn bidi<C: Call>(client: &MyServiceClientStub<C>) {
+    {
+        let requests = Box::pin(stream! {
+            yield proto!(MyRequest { query: 10 });
+            yield proto!(MyRequest { query: 20 });
+        });
+        let mut res = client.streaming_call(requests).await;
+        while let Some(res) = res.next().await {
+            println!("stream: {:?}", res);
+        }
+    }
+}
+
 async fn headers_example<C: Call>(client: &MyServiceClientStub<C>) {
     {
-        let (i, rx) = header_reader::HeaderReader::new();
+        let (i, rx) = HeaderReader::new();
         let res = client
             .unary_call(proto!(MyRequest { query: 1 }))
             .with_interceptor(i)
@@ -181,11 +182,9 @@ mod interceptor {
     use crate::grpc::*;
     use crate::grpc_protobuf::ProtoEncoder;
 
-    // Note: must have Clone so corresponding wrapped channel can impl Clone.
-    #[derive(Clone)]
-    pub struct FailAllInterceptCall {}
+    pub struct FailStatusInterceptor {}
 
-    impl CallInterceptor for FailAllInterceptCall {
+    impl CallInterceptor for FailStatusInterceptor {
         async fn call<C: CallOnce, E: Encoder, D: Decoder>(
             &self,
             descriptor: MethodDescriptor<E, D>,
@@ -197,7 +196,7 @@ mod interceptor {
         }
     }
 
-    pub struct FailingRecvStreamInterceptor<Delegate> {
+    struct FailingRecvStreamInterceptor<Delegate> {
         delegate: Delegate,
     }
 
@@ -215,7 +214,6 @@ mod interceptor {
         }
     }
 
-    #[derive(Clone)]
     pub struct PrintReqInterceptor {}
 
     impl CallInterceptor for PrintReqInterceptor {

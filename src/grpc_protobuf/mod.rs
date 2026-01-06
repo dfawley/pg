@@ -7,8 +7,8 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use crate::grpc::{
-    Args, Call, CallInterceptorOnce, CallOnce, CallOnceExt as _, Decoder, Encoder, InterceptorOnce,
-    MethodDescriptor, RecvStream, SendStream, Status,
+    Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, Decoder, Encoder, MethodDescriptor,
+    RecvStream, SendStream, Status,
 };
 
 pub struct UnaryCall<'a, C, Req, Res, ReqMsgView> {
@@ -98,15 +98,16 @@ where
 }
 
 pub struct BidiCall<'a, C, ReqStream: Stream, Res> {
-    channel: &'a C,
+    channel: C,
     desc: MethodDescriptor<ProtoEncoder<ReqStream::Item>, ProtoDecoder<Res>>,
     req_stream: ReqStream,
     args: Args,
+    _phantom: PhantomData<&'a ()>,
 }
 
 impl<'a, C, ReqStream: Stream, Res> BidiCall<'a, C, ReqStream, Res> {
     pub fn new(
-        channel: &'a C,
+        channel: C,
         desc: MethodDescriptor<ProtoEncoder<ReqStream::Item>, ProtoDecoder<Res>>,
         req: ReqStream,
     ) -> Self {
@@ -115,13 +116,14 @@ impl<'a, C, ReqStream: Stream, Res> BidiCall<'a, C, ReqStream, Res> {
             req_stream: req,
             desc,
             args: Default::default(),
+            _phantom: Default::default(),
         }
     }
 }
 
 impl<'a, C, ReqStream, Res> IntoFuture for BidiCall<'a, C, ReqStream, Res>
 where
-    C: Call,
+    C: CallOnce + 'a,
     ReqStream: Unpin + Stream + Send + 'a,
     ReqStream::Item: Message + Send + Sync + 'static,
     for<'b> <ReqStream::Item as Proxied>::View<'b>: Send + Serialize,

@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 use std::sync::Mutex;
 use std::time;
 

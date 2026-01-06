@@ -31,6 +31,7 @@ pub struct Trailers {
 pub struct Channel;
 
 #[derive(Debug)]
+#[allow(unused)]
 pub enum MethodType {
     Unary,
     ClientStream,
@@ -47,6 +48,7 @@ pub struct MethodDescriptor<E, D> {
 }
 
 /// Converts the input message view into bytes.
+#[allow(unused)]
 pub trait Encoder: Any + Send + Sync + Clone + 'static {
     type View<'a>: Send + Sync;
 
@@ -54,6 +56,7 @@ pub trait Encoder: Any + Send + Sync + Clone + 'static {
 }
 
 /// Converts the input bytes and sets the mutable message view.
+#[allow(unused)]
 pub trait Decoder: Any + Send + Sync + Clone + 'static {
     type Mut<'a>: Send + Sync;
 
@@ -110,7 +113,9 @@ pub trait Call: Send + Sync {
 /// call.  This is particularly relevant for pairing with CallInterceptorOnce
 /// usages.  It is blanket implemented on Callable references.
 pub trait CallOnce: Send + Sync {
-    /// Creates a parameterized call that can be invoked later.
+    /// Starts a call, returning the send and receive streams to interact with
+    /// the RPC.  The returned future may block until sufficient resources are
+    /// available to allow the call to start.
     fn call<E: Encoder, D: Decoder>(
         self,
         descriptor: MethodDescriptor<E, D>,

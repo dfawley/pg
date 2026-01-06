@@ -56,10 +56,7 @@ pub trait CallExt: Call + Sized {
 
 impl<C: Call> CallExt for C {
     fn with_interceptor<I: CallInterceptor>(self, interceptor: I) -> impl Call {
-        Interceptor {
-            call: self,
-            interceptor,
-        }
+        Interceptor::new(self, interceptor)
     }
 }
 
@@ -69,9 +66,6 @@ pub trait CallOnceExt: CallOnce + Sized {
 
 impl<C: CallOnce> CallOnceExt for C {
     fn with_interceptor<I: CallInterceptorOnce>(self, interceptor: I) -> impl CallOnce {
-        InterceptorOnce {
-            call: self,
-            interceptor,
-        }
+        InterceptorOnce::new(self, interceptor)
     }
 }
