@@ -1,93 +1,77 @@
 use super::*;
 
 #[derive(Clone)]
-pub struct CallableInterceptor<C, I> {
-    callable: C,
-    call_interceptor: I,
+pub struct Interceptor<C, I> {
+    call: C,
+    interceptor: I,
 }
 
-impl<C, I> CallableInterceptor<C, I> {
+impl<C, I> Interceptor<C, I> {
     pub fn new(callable: C, call_interceptor: I) -> Self {
         Self {
-            callable,
-            call_interceptor,
+            call: callable,
+            interceptor: call_interceptor,
         }
     }
 }
 
-struct InterceptorCall<'a, C, I> {
-    callable: &'a CallableInterceptor<C, I>,
-}
-
-impl<'a, C, I, E, D> Call<E, D> for InterceptorCall<'a, C, I>
+impl<C, I> Call for Interceptor<C, I>
 where
-    C: Callable,
+    C: Call,
     I: CallInterceptor,
-    E: Encoder,
-    D: Decoder,
 {
-    fn start(
-        self,
+    fn call<E: Encoder, D: Decoder>(
+        &self,
         descriptor: MethodDescriptor<E, D>,
         args: Args,
     ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send {
-        self.callable
-            .call_interceptor
-            .start(descriptor, args, &self.callable.callable)
-    }
-}
-
-impl<C: Callable, I: CallInterceptor> Callable for CallableInterceptor<C, I> {
-    fn call<E: Encoder, D: Decoder>(&self) -> impl Call<E, D> {
-        InterceptorCall { callable: self }
+        self.interceptor.call(descriptor, args, &self.call)
     }
 }
 
 pub struct InterceptorOnce<C, I> {
-    callable: C,
-    call_interceptor: I,
+    call: C,
+    interceptor: I,
 }
 
 impl<C, I> InterceptorOnce<C, I> {
-    pub fn new(callable: C, call_interceptor: I) -> Self {
-        Self {
-            callable,
-            call_interceptor,
-        }
+    pub fn new(call: C, interceptor: I) -> Self {
+        Self { call, interceptor }
     }
 }
 
-impl<C: CallableOnce, I: CallInterceptorOnce> CallableOnce for InterceptorOnce<C, I> {
-    fn call<E: Encoder, D: Decoder>(self) -> impl Call<E, D> {
-        self
-    }
-}
-
-impl<C, I, E, D> Call<E, D> for InterceptorOnce<C, I>
-where
-    C: CallableOnce,
-    I: CallInterceptorOnce,
-    E: Encoder,
-    D: Decoder,
-{
-    fn start(
+impl<C: CallOnce, I: CallInterceptorOnce> CallOnce for InterceptorOnce<C, I> {
+    fn call<E: Encoder, D: Decoder>(
         self,
         descriptor: MethodDescriptor<E, D>,
         args: Args,
     ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send {
-        self.call_interceptor.start(descriptor, args, self.callable)
+        self.interceptor.call(descriptor, args, self.call)
     }
 }
 
-pub trait CallableExt: Callable + Sized {
-    fn with_interceptor<I: CallInterceptor>(self, interceptor: I) -> CallableInterceptor<Self, I>;
+pub trait CallExt: Call + Sized {
+    fn with_interceptor<I: CallInterceptor>(self, interceptor: I) -> impl Call;
 }
 
-impl<C: Callable> CallableExt for C {
-    fn with_interceptor<I: CallInterceptor>(self, interceptor: I) -> CallableInterceptor<Self, I> {
-        CallableInterceptor {
-            callable: self,
-            call_interceptor: interceptor,
+impl<C: Call> CallExt for C {
+    fn with_interceptor<I: CallInterceptor>(self, interceptor: I) -> impl Call {
+        Interceptor {
+            call: self,
+            interceptor,
+        }
+    }
+}
+
+pub trait CallOnceExt: CallOnce + Sized {
+    fn with_interceptor<I: CallInterceptorOnce>(self, interceptor: I) -> impl CallOnce;
+}
+
+impl<C: CallOnce> CallOnceExt for C {
+    fn with_interceptor<I: CallInterceptorOnce>(self, interceptor: I) -> impl CallOnce {
+        InterceptorOnce {
+            call: self,
+            interceptor,
         }
     }
 }

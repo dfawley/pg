@@ -62,7 +62,7 @@ pub trait Decoder: Any + Send + Sync + Clone + 'static {
 
 /// SendStream represents the sending side of a client stream.  Dropping the
 /// SendStream or calling send_final_message results in a signal the server can
-/// use to determine the client is done sending.
+/// use to determine the client is done sending requests.
 pub trait SendStream<E: Encoder>: Send + Sync + 'static {
     /// Sends msg on the stream.  If false is returned, the message could not be
     /// delivered because the stream was closed.  Future calls to SendStream
@@ -72,7 +72,7 @@ pub trait SendStream<E: Encoder>: Send + Sync + 'static {
     /// Sends msg on the stream and indicates the client has no further messages
     /// to send.
     // TODO - This should consume self, but that fails without the new trait
-    // solver.  Also it's not dyn compatible if it takes self.
+    // solver.
     fn send_and_close<'a>(&'a mut self, msg: E::View<'a>) -> impl Future<Output = ()> + Send + 'a;
 }
 
@@ -94,44 +94,45 @@ pub trait RecvStream<D: Decoder>: Send + Sync + 'static {
     fn trailers(self) -> impl Future<Output = Trailers> + Send;
 }
 
-/// Callable begins the dispatching of an RPC.
-pub trait Callable: Send + Sync {
+/// Call begins the dispatching of an RPC.
+pub trait Call: Send + Sync {
+    /// Starts a call, returning the send and receive streams to interact with
+    /// the RPC.  The returned future may block until sufficient resources are
+    /// available to allow the call to start.
+    fn call<E: Encoder, D: Decoder>(
+        &self,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+    ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send;
+}
+
+/// CallOnce is like Call, but consumes the receiver to limit it to a single
+/// call.  This is particularly relevant for pairing with CallInterceptorOnce
+/// usages.  It is blanket implemented on Callable references.
+pub trait CallOnce: Send + Sync {
     /// Creates a parameterized call that can be invoked later.
-    fn call<'a, E: Encoder, D: Decoder>(&'a self) -> impl Call<E, D> + 'a;
-}
-
-/// CallableOnce is like Callable, but consumes the receiver to limit it to a
-/// single call.  This is particularly relevant for pairing with
-/// CallInterceptorOnce usages.  It is blanket implemented on Callable
-/// references.
-pub trait CallableOnce: Send + Sync {
-    /// Creates a parameterized call that can be invoked later.
-    fn call<E: Encoder, D: Decoder>(self) -> impl Call<E, D>;
-}
-
-impl<C: Callable> CallableOnce for &C {
-    fn call<E: Encoder, D: Decoder>(self) -> impl Call<E, D> {
-        <C as Callable>::call(self)
-    }
-}
-
-/// Call is used to actually start an RPC.
-pub trait Call<E: Encoder, D: Decoder>: Send + Sync {
-    /// Starts the call, consuming the Call and returning the send and receive
-    /// streams to interact with the RPC.  The returned future may block until
-    /// sufficient resources are available to allow the call to start.
-    fn start(
+    fn call<E: Encoder, D: Decoder>(
         self,
         descriptor: MethodDescriptor<E, D>,
         args: Args,
     ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send;
 }
 
+impl<C: Call> CallOnce for &C {
+    fn call<E: Encoder, D: Decoder>(
+        self,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+    ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send {
+        <C as Call>::call(self, descriptor, args)
+    }
+}
+
 /// CallInterceptor allows intercepting a Call.
 pub trait CallInterceptor: Send + Sync {
     /// Starts a call.  Implementations should generally use next to create and
     /// start a Call whose streams are optionally wrapped before being returned.
-    fn start<C: CallableOnce, E: Encoder, D: Decoder>(
+    fn call<C: CallOnce, E: Encoder, D: Decoder>(
         &self,
         descriptor: MethodDescriptor<E, D>,
         args: Args,
@@ -141,7 +142,7 @@ pub trait CallInterceptor: Send + Sync {
 
 /// CallInterceptorOnce allows intercepting a Call one time only.
 pub trait CallInterceptorOnce: Send + Sync {
-    fn start<C: CallableOnce, E: Encoder, D: Decoder>(
+    fn call<C: CallOnce, E: Encoder, D: Decoder>(
         self,
         descriptor: MethodDescriptor<E, D>,
         args: Args,

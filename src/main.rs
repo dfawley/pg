@@ -8,13 +8,13 @@ use async_stream::stream;
 use futures_util::StreamExt;
 use gencode::MyServiceClientStub;
 use gencode::pb::*;
-use grpc::Callable;
+use grpc::Call;
 use grpc::Channel;
 use grpc_protobuf::SharedCall;
 use protobuf::proto;
 use std::time::Duration;
 
-use grpc::CallableInterceptor;
+use grpc::Interceptor;
 
 #[tokio::main]
 async fn main() {
@@ -24,15 +24,15 @@ async fn main() {
     bidi(client.clone()).await;
     headers_example(client.clone()).await;
 
-    let wrap_chan = CallableInterceptor::new(channel, interceptor::FailAllInterceptCall {});
-    let wrap_chan = CallableInterceptor::new(wrap_chan, interceptor::PrintReqInterceptor {});
+    let wrap_chan = Interceptor::new(channel, interceptor::FailAllInterceptCall {});
+    let wrap_chan = Interceptor::new(wrap_chan, interceptor::PrintReqInterceptor {});
 
     let client = MyServiceClientStub::new(wrap_chan);
     unary(client.clone()).await;
     bidi(client.clone()).await;
 }
 
-async fn bidi<C: Callable>(client: MyServiceClientStub<C>) {
+async fn bidi<C: Call>(client: MyServiceClientStub<C>) {
     {
         let requests = Box::pin(stream! {
             yield proto!(MyRequest { query: 10 });
@@ -45,7 +45,7 @@ async fn bidi<C: Callable>(client: MyServiceClientStub<C>) {
     }
 }
 
-async fn unary<C: Callable>(client: MyServiceClientStub<C>) {
+async fn unary<C: Call>(client: MyServiceClientStub<C>) {
     {
         // Using an owned message for request and response:
         let res = client.unary_call(proto!(MyRequest { query: 1 })).await;
@@ -94,7 +94,7 @@ async fn unary<C: Callable>(client: MyServiceClientStub<C>) {
     }
 }
 
-async fn headers_example<C: Callable>(client: MyServiceClientStub<C>) {
+async fn headers_example<C: Call>(client: MyServiceClientStub<C>) {
     {
         let (i, rx) = header_reader::HeaderReader::new();
         let res = client
@@ -126,13 +126,13 @@ mod header_reader {
     }
 
     impl CallInterceptorOnce for HeaderReader {
-        async fn start<C: CallableOnce, E: Encoder, D: Decoder>(
+        async fn call<C: CallOnce, E: Encoder, D: Decoder>(
             self,
             descriptor: MethodDescriptor<E, D>,
             args: Args,
             next: C,
         ) -> (impl SendStream<E>, impl RecvStream<D>) {
-            let (tx, delegate) = next.call().start(descriptor, args).await;
+            let (tx, delegate) = next.call(descriptor, args).await;
             (
                 tx,
                 HeaderReaderRecvStream {
@@ -183,13 +183,13 @@ mod interceptor {
     pub struct FailAllInterceptCall {}
 
     impl CallInterceptor for FailAllInterceptCall {
-        async fn start<C: CallableOnce, E: Encoder, D: Decoder>(
+        async fn call<C: CallOnce, E: Encoder, D: Decoder>(
             &self,
             descriptor: MethodDescriptor<E, D>,
             args: Args,
             next: C,
         ) -> (impl SendStream<E>, impl RecvStream<D>) {
-            let (tx, rx) = next.call().start(descriptor, args).await;
+            let (tx, rx) = next.call(descriptor, args).await;
             (tx, FailingRecvStreamInterceptor { delegate: rx })
         }
     }
@@ -216,13 +216,13 @@ mod interceptor {
     pub struct PrintReqInterceptor {}
 
     impl CallInterceptor for PrintReqInterceptor {
-        async fn start<C: CallableOnce, E: Encoder, D: Decoder>(
+        async fn call<C: CallOnce, E: Encoder, D: Decoder>(
             &self,
             descriptor: MethodDescriptor<E, D>,
             args: Args,
             next: C,
         ) -> (impl SendStream<E>, impl RecvStream<D>) {
-            let (tx, rx) = next.call().start(descriptor, args).await;
+            let (tx, rx) = next.call(descriptor, args).await;
             (
                 PrintReqSendStreamInterceptor {
                     delegate: tx,

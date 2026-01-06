@@ -7,8 +7,8 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use crate::grpc::{
-    Args, Call as _, CallInterceptorOnce, Callable, CallableOnce, Decoder, Encoder,
-    InterceptorOnce, MethodDescriptor, RecvStream, SendStream, Status,
+    Args, Call, CallInterceptorOnce, CallOnce, CallOnceExt as _, Decoder, Encoder, InterceptorOnce,
+    MethodDescriptor, RecvStream, SendStream, Status,
 };
 
 pub struct UnaryCall<'a, C, Req, Res, ReqMsgView> {
@@ -21,7 +21,7 @@ pub struct UnaryCall<'a, C, Req, Res, ReqMsgView> {
 
 impl<'a, C, Req, Res, ReqMsgView> UnaryCall<'a, C, Req, Res, ReqMsgView>
 where
-    C: CallableOnce,
+    C: CallOnce,
     Req: Message + 'static,
     Res: Message + 'static,
     ReqMsgView: AsView<Proxied = Req> + Send + 'a,
@@ -45,9 +45,9 @@ where
     pub fn with_interceptor<I: CallInterceptorOnce>(
         self,
         interceptor: I,
-    ) -> UnaryCall<'a, InterceptorOnce<C, I>, Req, Res, ReqMsgView> {
+    ) -> UnaryCall<'a, impl CallOnce, Req, Res, ReqMsgView> {
         UnaryCall {
-            channel: InterceptorOnce::new(self.channel, interceptor),
+            channel: self.channel.with_interceptor(interceptor),
             desc: self.desc,
             req: self.req,
             args: self.args,
@@ -59,7 +59,7 @@ where
     where
         ResMsgMut: AsMut<MutProxied = Res>,
     {
-        let (mut tx, mut rx) = self.channel.call().start(self.desc, self.args).await;
+        let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
         tx.send_and_close(self.req.as_view()).await;
         rx.next_msg(res.as_mut()).await;
         rx.trailers().await.status
@@ -68,7 +68,7 @@ where
 
 impl<'a, C, Req, Res, ReqMsgView> IntoFuture for UnaryCall<'a, C, Req, Res, ReqMsgView>
 where
-    C: CallableOnce + 'a,
+    C: CallOnce + 'a,
     Req: Message + 'static,
     Res: Message + 'static,
     ReqMsgView: AsView<Proxied = Req> + Send + 'a,
@@ -80,7 +80,7 @@ where
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let (mut tx, mut rx) = self.channel.call().start(self.desc, self.args).await;
+            let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
 
             tx.send_and_close(self.req.as_view()).await;
 
@@ -121,7 +121,7 @@ impl<'a, C, ReqStream: Stream, Res> BidiCall<'a, C, ReqStream, Res> {
 
 impl<'a, C, ReqStream, Res> IntoFuture for BidiCall<'a, C, ReqStream, Res>
 where
-    C: Callable,
+    C: Call,
     ReqStream: Unpin + Stream + Send + 'a,
     ReqStream::Item: Message + Send + Sync + 'static,
     for<'b> <ReqStream::Item as Proxied>::View<'b>: Send + Serialize,
@@ -133,7 +133,7 @@ where
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
-            let (mut tx, mut rx) = self.channel.call().start(self.desc, self.args).await;
+            let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
 
             // Create a stream for sending data.  Yields None after every
             // message to cause the receiver stream to be polled.

@@ -1,4 +1,4 @@
-use crate::grpc::{Callable, MethodDescriptor, MethodType};
+use crate::grpc::{Call, MethodDescriptor, MethodType};
 use crate::grpc_protobuf::{BidiCall, ProtoDecoder, ProtoEncoder, UnaryCall};
 
 pub mod pb {
@@ -19,7 +19,7 @@ impl<C> MyServiceClientStub<C> {
     }
 }
 
-impl<C: Callable> MyServiceClientStub<C> {
+impl<C: Call> MyServiceClientStub<C> {
     pub fn unary_call<'stub: 'call, 'call, ReqMsgView>(
         &'stub self,
         req: ReqMsgView,

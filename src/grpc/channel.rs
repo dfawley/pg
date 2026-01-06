@@ -6,14 +6,9 @@ use crate::gencode::pb::*;
 
 use super::*;
 
-pub struct ChannelCall<'a, E, D> {
-    _chan: &'a Channel,
-    _d: PhantomData<(E, D)>,
-}
-
-impl<'a, E: Encoder, D: Decoder> Call<E, D> for ChannelCall<'a, E, D> {
-    async fn start(
-        self,
+impl Call for Channel {
+    async fn call<E: Encoder, D: Decoder>(
+        &self,
         descriptor: MethodDescriptor<E, D>,
         _args: Args,
     ) -> (impl SendStream<E>, impl RecvStream<D>) {
@@ -30,16 +25,6 @@ impl<'a, E: Encoder, D: Decoder> Call<E, D> for ChannelCall<'a, E, D> {
                 cnt: Mutex::new(0),
             },
         )
-    }
-}
-
-impl Callable for Channel {
-    fn call<'a, E: Encoder, D: Decoder>(&'a self) -> impl Call<E, D> + 'a {
-        // BoxCall is unnecessary but it erases types.
-        ChannelCall::<E, D> {
-            _chan: self,
-            _d: PhantomData,
-        }
     }
 }
 
