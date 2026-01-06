@@ -113,7 +113,7 @@ pub trait CallableOnce: Send + Sync {
     fn call<E: Encoder, D: Decoder>(self) -> impl Call<E, D>;
 }
 
-impl<'a, C: Callable> CallableOnce for &'a C {
+impl<C: Callable> CallableOnce for &C {
     fn call<E: Encoder, D: Decoder>(self) -> impl Call<E, D> {
         <C as Callable>::call(self)
     }

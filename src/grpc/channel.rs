@@ -37,7 +37,7 @@ impl Callable for Channel {
     fn call<'a, E: Encoder, D: Decoder>(&'a self) -> impl Call<E, D> + 'a {
         // BoxCall is unnecessary but it erases types.
         BoxCall::new(ChannelCall::<E, D> {
-            _chan: &self,
+            _chan: self,
             _d: PhantomData,
         })
     }

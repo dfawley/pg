@@ -17,7 +17,7 @@ use grpc::CallableInterceptor;
 
 #[tokio::main]
 async fn main() {
-    let channel = Channel::default();
+    let channel = Channel {};
     let client = MyServiceClientStub::new(channel.clone());
     unary(client.clone()).await;
     bidi(client.clone()).await;
