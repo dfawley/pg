@@ -64,8 +64,8 @@ pub trait Decoder: Any + Send + Sync + Clone + 'static {
 }
 
 /// SendStream represents the sending side of a client stream.  Dropping the
-/// SendStream or calling send_final_message results in a signal the server can
-/// use to determine the client is done sending requests.
+/// SendStream or calling send_and_close results in a signal the server can use
+/// to determine the client is done sending requests.
 pub trait SendStream<E: Encoder>: Send + Sync + 'static {
     /// Sends msg on the stream.  If false is returned, the message could not be
     /// delivered because the stream was closed.  Future calls to SendStream
