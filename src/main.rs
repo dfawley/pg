@@ -16,6 +16,8 @@ use std::time::Duration;
 
 use grpc::Interceptor;
 
+use crate::grpc::CallExt;
+
 #[tokio::main]
 async fn main() {
     let channel = Channel {};
@@ -24,8 +26,9 @@ async fn main() {
     bidi(&client).await;
     headers_example(&client).await;
 
-    let wrap_chan = Interceptor::new(channel, interceptor::FailAllInterceptCall {});
-    let wrap_chan = Interceptor::new(wrap_chan, interceptor::PrintReqInterceptor {});
+    let wrap_chan = channel
+        .with_interceptor(interceptor::FailAllInterceptCall {})
+        .with_interceptor(interceptor::PrintReqInterceptor {});
 
     let client = MyServiceClientStub::new(wrap_chan);
     unary(&client).await;
