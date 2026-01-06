@@ -1,9 +1,7 @@
 use std::any::Any;
 use std::fmt::Debug;
 
-mod dynadapt;
 mod intercept;
-pub use dynadapt::*;
 pub use intercept::*;
 mod channel;
 pub use channel::*;
