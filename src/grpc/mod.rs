@@ -133,10 +133,10 @@ impl<C: Call> CallOnce for &C {
     }
 }
 
-/// CallInterceptor allows intercepting a Call.
+/// CallInterceptor allows intercepting a call.
 pub trait CallInterceptor: Send + Sync {
     /// Starts a call.  Implementations should generally use next to create and
-    /// start a Call whose streams are optionally wrapped before being returned.
+    /// start a call whose streams are optionally wrapped before being returned.
     fn call<C: CallOnce, E: Encoder, D: Decoder>(
         &self,
         descriptor: MethodDescriptor<E, D>,
@@ -145,7 +145,7 @@ pub trait CallInterceptor: Send + Sync {
     ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send;
 }
 
-/// CallInterceptorOnce allows intercepting a Call one time only.
+/// CallInterceptorOnce allows intercepting a call one time only.
 pub trait CallInterceptorOnce: Send + Sync {
     fn call<C: CallOnce, E: Encoder, D: Decoder>(
         self,

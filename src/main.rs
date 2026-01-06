@@ -152,22 +152,36 @@ mod header_reader {
         delegate: Delegate,
     }
 
+    impl<Delegate> HeaderReaderRecvStream<Delegate> {
+        async fn check_headers<D: Decoder>(&mut self)
+        where
+            Delegate: RecvStream<D>,
+        {
+            if let Some(tx) = self.tx.take() {
+                let headers = self.delegate.headers().await;
+                if let Some(h) = headers {
+                    let _ = tx.send(h);
+                }
+            }
+        }
+    }
+
     impl<D: Decoder, Delegate: RecvStream<D>> RecvStream<D> for HeaderReaderRecvStream<Delegate> {
         async fn headers(&mut self) -> Option<Headers> {
             let headers = self.delegate.headers().await;
             if let Some(tx) = self.tx.take()
                 && let Some(h) = headers.clone()
             {
-                tx.send(h).unwrap();
+                let _ = tx.send(h);
             }
             headers
         }
         async fn next_msg<'a>(&'a mut self, msg: D::Mut<'a>) -> bool {
-            RecvStream::headers(self).await;
+            self.check_headers().await;
             self.delegate.next_msg(msg).await
         }
         async fn trailers(mut self) -> Trailers {
-            RecvStream::headers(&mut self).await;
+            self.check_headers().await;
             self.delegate.trailers().await
         }
     }
