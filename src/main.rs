@@ -20,19 +20,19 @@ use grpc::Interceptor;
 async fn main() {
     let channel = Channel {};
     let client = MyServiceClientStub::new(channel.clone());
-    unary(client.clone()).await;
-    bidi(client.clone()).await;
-    headers_example(client.clone()).await;
+    unary(&client).await;
+    bidi(&client).await;
+    headers_example(&client).await;
 
     let wrap_chan = Interceptor::new(channel, interceptor::FailAllInterceptCall {});
     let wrap_chan = Interceptor::new(wrap_chan, interceptor::PrintReqInterceptor {});
 
     let client = MyServiceClientStub::new(wrap_chan);
-    unary(client.clone()).await;
-    bidi(client.clone()).await;
+    unary(&client).await;
+    bidi(&client).await;
 }
 
-async fn bidi<C: Call>(client: MyServiceClientStub<C>) {
+async fn bidi<C: Call>(client: &MyServiceClientStub<C>) {
     {
         let requests = Box::pin(stream! {
             yield proto!(MyRequest { query: 10 });
@@ -45,7 +45,7 @@ async fn bidi<C: Call>(client: MyServiceClientStub<C>) {
     }
 }
 
-async fn unary<C: Call>(client: MyServiceClientStub<C>) {
+async fn unary<C: Call>(client: &MyServiceClientStub<C>) {
     {
         // Using an owned message for request and response:
         let res = client.unary_call(proto!(MyRequest { query: 1 })).await;
@@ -94,7 +94,7 @@ async fn unary<C: Call>(client: MyServiceClientStub<C>) {
     }
 }
 
-async fn headers_example<C: Call>(client: MyServiceClientStub<C>) {
+async fn headers_example<C: Call>(client: &MyServiceClientStub<C>) {
     {
         let (i, rx) = header_reader::HeaderReader::new();
         let res = client
