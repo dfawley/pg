@@ -2,6 +2,7 @@
 
 mod gencode;
 mod grpc;
+mod grpc_protobuf;
 
 use async_stream::stream;
 use futures_util::StreamExt;
@@ -9,7 +10,7 @@ use gencode::MyServiceClientStub;
 use gencode::pb::*;
 use grpc::Callable;
 use grpc::Channel;
-use grpc::protobuf::SharedCall;
+use grpc_protobuf::SharedCall;
 use protobuf::proto;
 use std::time::Duration;
 
@@ -174,8 +175,8 @@ mod interceptor {
 
     use crate::gencode::pb::MyRequest;
     use crate::gencode::pb::MyRequestView;
-    use crate::grpc::protobuf::ProtoEncoder;
     use crate::grpc::*;
+    use crate::grpc_protobuf::ProtoEncoder;
 
     // Note: must have Clone so corresponding wrapped channel can impl Clone.
     #[derive(Clone)]

@@ -6,8 +6,6 @@ pub use intercept::*;
 mod channel;
 pub use channel::*;
 
-pub mod protobuf;
-
 #[derive(Clone, Debug)]
 pub struct Status {
     pub code: i32,
