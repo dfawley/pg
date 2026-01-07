@@ -31,9 +31,9 @@ impl<C: Call> MyServiceClientStub<C> {
             &self.channel,
             MethodDescriptor {
                 method_name: "unary_call".to_string(),
+                method_type: MethodType::Unary,
                 message_encoder: ProtoEncoder::new(),
                 message_decoder: ProtoDecoder::new(),
-                method_type: MethodType::Unary,
             },
             req,
         )
@@ -50,9 +50,9 @@ impl<C: Call> MyServiceClientStub<C> {
             &self.channel,
             MethodDescriptor {
                 method_name: "streaming_call".to_string(),
+                method_type: MethodType::BidiStream,
                 message_encoder: ProtoEncoder::new(),
                 message_decoder: ProtoDecoder::new(),
-                method_type: MethodType::BidiStream,
             },
             req_stream,
         )

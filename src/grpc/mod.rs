@@ -154,3 +154,14 @@ pub trait CallInterceptorOnce: Send + Sync {
         next: C,
     ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send;
 }
+
+impl<C: CallInterceptor> CallInterceptorOnce for &C {
+    fn call<CO: CallOnce, E: Encoder, D: Decoder>(
+        self,
+        descriptor: MethodDescriptor<E, D>,
+        args: Args,
+        next: CO,
+    ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send {
+        <C as CallInterceptor>::call(self, descriptor, args, next)
+    }
+}
