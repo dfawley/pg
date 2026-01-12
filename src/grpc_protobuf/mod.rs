@@ -1,38 +1,34 @@
 use async_stream::stream;
 use futures_core::Stream;
 use futures_util::{StreamExt, stream::select};
-use protobuf::{AsMut, AsView, ClearAndParse, Message, Proxied, Serialize};
+use protobuf::{
+    AsMut, AsView, ClearAndParse, Message, MessageMut, MessageView, MutProxied, Proxied, Serialize,
+    ViewProxy,
+};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::time::Duration;
 
 use crate::grpc::{
-    Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, Decoder, Encoder, MethodDescriptor,
-    RecvStream, SendStream, Status,
+    Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, MethodDescriptor, RecvMessage,
+    RecvStream, SendMessage, SendStream, Status,
 };
 
-pub struct UnaryCall<'a, C, Req, Res, ReqMsgView> {
+pub struct UnaryCall<'a, C, Res, ReqMsgView> {
     channel: C,
-    desc: MethodDescriptor<ProtoEncoder<Req>, ProtoDecoder<Res>>,
+    desc: MethodDescriptor,
     req: ReqMsgView,
     args: Args,
-    _phantom: PhantomData<&'a ()>,
+    _phantom: PhantomData<&'a Res>,
 }
 
-impl<'a, C, Req, Res, ReqMsgView> UnaryCall<'a, C, Req, Res, ReqMsgView>
+impl<'a, C, Res, ReqMsgView> UnaryCall<'a, C, Res, ReqMsgView>
 where
     C: CallOnce,
-    Req: Message + 'static,
     Res: Message + 'static,
-    ReqMsgView: AsView<Proxied = Req> + Send + 'a,
-    for<'b> Req::View<'b>: Send + Serialize,
-    for<'b> Res::Mut<'b>: Send + ClearAndParse,
+    ReqMsgView: AsView + Send + Sync + 'a,
 {
-    pub fn new(
-        channel: C,
-        desc: MethodDescriptor<ProtoEncoder<Req>, ProtoDecoder<Res>>,
-        req: ReqMsgView,
-    ) -> Self {
+    pub fn new(channel: C, desc: MethodDescriptor, req: ReqMsgView) -> Self {
         Self {
             channel,
             req,
@@ -45,7 +41,7 @@ where
     pub fn with_interceptor<I: CallInterceptorOnce>(
         self,
         interceptor: I,
-    ) -> UnaryCall<'a, impl CallOnce, Req, Res, ReqMsgView> {
+    ) -> UnaryCall<'a, impl CallOnce, Res, ReqMsgView> {
         UnaryCall {
             channel: self.channel.with_interceptor(interceptor),
             desc: self.desc,
@@ -57,23 +53,29 @@ where
 
     pub async fn with_response_message<ResMsgMut>(self, res: &mut ResMsgMut) -> Status
     where
-        ResMsgMut: AsMut<MutProxied = Res>,
+        ResMsgMut: AsMut<MutProxied = Res> + Send + Sync,
+        for<'b> Res::Mut<'b>: Send + ClearAndParse,
+        for<'b> <Res as MutProxied>::Mut<'b>: MessageMut<'b>,
+        for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>:
+            MessageView<'b> + Send + Sync,
     {
         let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
-        tx.send_and_close(self.req.as_view()).await;
-        rx.next_msg(res.as_mut()).await;
+        tx.send_and_close(&ProtoMessageView(self.req.as_view(), PhantomData) as &dyn SendMessage)
+            .await;
+        rx.next_msg(&mut ProtoMessageMut(res.as_mut()) as &mut dyn RecvMessage)
+            .await;
         rx.trailers().await.status
     }
 }
 
-impl<'a, C, Req, Res, ReqMsgView> IntoFuture for UnaryCall<'a, C, Req, Res, ReqMsgView>
+impl<'a, C, Res, ReqMsgView> IntoFuture for UnaryCall<'a, C, Res, ReqMsgView>
 where
     C: CallOnce + 'a,
-    Req: Message + 'static,
     Res: Message + 'static,
-    ReqMsgView: AsView<Proxied = Req> + Send + 'a,
-    for<'b> Req::View<'b>: Send + Serialize,
+    ReqMsgView: AsView + Send + Sync + 'a,
     for<'b> Res::Mut<'b>: Send + ClearAndParse,
+    for<'b> <Res as MutProxied>::Mut<'b>: MessageMut<'b>,
+    for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>: MessageView<'b> + Send + Sync,
 {
     type Output = Result<Res, Status>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
@@ -81,11 +83,14 @@ where
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
-
-            tx.send_and_close(self.req.as_view()).await;
+            tx.send_and_close(
+                &ProtoMessageView(self.req.as_view(), PhantomData) as &dyn SendMessage
+            )
+            .await;
 
             let mut res = Res::default();
-            rx.next_msg(res.as_mut()).await;
+            rx.next_msg(&mut ProtoMessageMut(res.as_mut()) as &mut dyn RecvMessage)
+                .await;
 
             let status = rx.trailers().await.status;
             if status.code != 0 {
@@ -99,18 +104,14 @@ where
 
 pub struct BidiCall<'a, C, ReqStream: Stream, Res> {
     channel: C,
-    desc: MethodDescriptor<ProtoEncoder<ReqStream::Item>, ProtoDecoder<Res>>,
+    desc: MethodDescriptor,
     req_stream: ReqStream,
     args: Args,
-    _phantom: PhantomData<&'a ()>,
+    _phantom: PhantomData<&'a Res>,
 }
 
 impl<'a, C, ReqStream: Stream, Res> BidiCall<'a, C, ReqStream, Res> {
-    pub fn new(
-        channel: C,
-        desc: MethodDescriptor<ProtoEncoder<ReqStream::Item>, ProtoDecoder<Res>>,
-        req: ReqStream,
-    ) -> Self {
+    pub fn new(channel: C, desc: MethodDescriptor, req: ReqStream) -> Self {
         Self {
             channel,
             req_stream: req,
@@ -129,6 +130,8 @@ where
     for<'b> <ReqStream::Item as Proxied>::View<'b>: Send + Serialize,
     Res: Message + 'static,
     for<'b> Res::Mut<'b>: Send + ClearAndParse,
+    for<'b> <<ReqStream as Stream>::Item as Proxied>::View<'b>: MessageView<'b>,
+    for<'b> <Res as MutProxied>::Mut<'b>: MessageMut<'b>,
 {
     type Output = Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send + 'a>>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
@@ -141,7 +144,7 @@ where
             // message to cause the receiver stream to be polled.
             let sender = stream! {
                 while let Some(req) = self.req_stream.next().await {
-                    if !tx.send_msg(req.as_view()).await {
+                    if !tx.send_msg(&ProtoMessageView(req.as_view(),PhantomData) as &dyn SendMessage).await {
                         return;
                     }
                     yield None;
@@ -154,7 +157,7 @@ where
             let receiver = stream! {
                 loop {
                     let mut res = Res::default();
-                    if rx.next_msg(res.as_mut()).await {
+                    if rx.next_msg(&mut ProtoMessageMut(res.as_mut()) as &mut dyn RecvMessage).await {
                         yield Ok(res);
                     } else {
                         yield Err(rx.trailers().await.status);
@@ -179,8 +182,8 @@ pub trait CallArgs: private::Sealed {
     fn args_mut(&mut self) -> &mut Args;
 }
 
-impl<'a, C, Req, Res, ReqMsg> private::Sealed for UnaryCall<'a, C, Req, Res, ReqMsg> {}
-impl<'a, C, Req, Res, ReqMsg> CallArgs for UnaryCall<'a, C, Req, Res, ReqMsg> {
+impl<'a, C, Res, ReqMsg> private::Sealed for UnaryCall<'a, C, Res, ReqMsg> {}
+impl<'a, C, Res, ReqMsg> CallArgs for UnaryCall<'a, C, Res, ReqMsg> {
     fn args_mut(&mut self) -> &mut Args {
         &mut self.args
     }
@@ -204,44 +207,26 @@ impl<T: CallArgs> SharedCall for T {
     }
 }
 
-#[derive(Clone)]
-pub struct ProtoEncoder<M>(PhantomData<M>);
+pub struct ProtoMessageView<'a, V>(V, PhantomData<&'a ()>);
 
-impl<M> ProtoEncoder<M> {
-    pub const fn new() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<M> Encoder for ProtoEncoder<M>
+impl<'a, V: ViewProxy<'a>> SendMessage for ProtoMessageView<'a, V>
 where
-    M: Message + 'static,
-    for<'a> M::View<'a>: Send + Serialize,
+    V: Serialize + Send + Sync,
 {
-    type View<'a> = M::View<'a>;
-
-    fn encode<'a>(&self, item: Self::View<'a>) -> Vec<Vec<u8>> {
-        vec![item.serialize().unwrap()]
+    fn encode(&self) -> Vec<Vec<u8>> {
+        vec![self.0.serialize().unwrap()]
     }
 }
 
-#[derive(Clone)]
-pub struct ProtoDecoder<M>(PhantomData<M>);
+pub struct ProtoMessageMut<M>(pub M);
 
-impl<M> ProtoDecoder<M> {
-    pub const fn new() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<M> Decoder for ProtoDecoder<M>
+impl<M> RecvMessage for ProtoMessageMut<M>
 where
-    M: Message + 'static,
-    for<'a> M::Mut<'a>: Send + ClearAndParse,
+    M: Send + Sync + ClearAndParse,
 {
-    type Mut<'a> = M::Mut<'a>;
-
-    fn decode<'a>(&self, data: Vec<Vec<u8>>, mut item: Self::Mut<'a>) {
-        item.clear_and_parse(data.as_slice()[0].as_slice()).unwrap();
+    fn decode(&mut self, data: Vec<Vec<u8>>) {
+        self.0
+            .clear_and_parse(data.as_slice()[0].as_slice())
+            .unwrap();
     }
 }

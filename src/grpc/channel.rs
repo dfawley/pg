@@ -2,27 +2,23 @@ use std::sync::Mutex;
 use std::time;
 
 use crate::gencode::pb::*;
+use crate::grpc_protobuf::ProtoMessageMut;
 
 use super::*;
 
 impl Call for Channel {
-    async fn call<E: Encoder, D: Decoder>(
+    async fn call(
         &self,
-        descriptor: MethodDescriptor<E, D>,
+        descriptor: MethodDescriptor,
         _args: Args,
-    ) -> (impl SendStream<E>, impl RecvStream<D>) {
+    ) -> (impl SendStream, impl RecvStream) {
         println!(
             "starting call for {:?} ({:?})",
             descriptor.method_name, descriptor.method_type
         );
         (
-            ChannelSendStream {
-                _e: descriptor.message_encoder.clone(),
-            },
-            ChannelRecvStream {
-                _d: descriptor.message_decoder.clone(),
-                cnt: Mutex::new(0),
-            },
+            ChannelSendStream {},
+            ChannelRecvStream { cnt: Mutex::new(0) },
         )
     }
 }
@@ -32,38 +28,39 @@ pub struct Args {
     pub timeout: time::Duration,
 }
 
-pub struct ChannelSendStream<T> {
-    _e: T,
-}
+pub struct ChannelSendStream {}
 
-impl<T: Encoder> SendStream<T> for ChannelSendStream<T> {
-    async fn send_msg<'a>(&'a mut self, _msg: T::View<'a>) -> bool {
+impl SendStream for ChannelSendStream {
+    async fn send_msg<'a>(&'a mut self, _msg: &'a dyn SendMessage) -> bool {
         true // false on error sending
     }
-    async fn send_and_close<'a>(&'a mut self, _msg: T::View<'a>) {
+    async fn send_and_close<'a>(&'a mut self, _msg: &'a dyn SendMessage) {
         // Error doesn't matter when sending final message.
     }
 }
 
-pub struct ChannelRecvStream<T> {
+pub struct ChannelRecvStream {
     cnt: Mutex<i32>,
-    _d: T,
 }
 
-impl<T: Decoder> RecvStream<T> for ChannelRecvStream<T> {
+impl RecvStream for ChannelRecvStream {
     async fn headers(&mut self) -> Option<Headers> {
         Some(Headers {})
     }
 
-    async fn next_msg<'a>(&'a mut self, mut msg: T::Mut<'a>) -> bool {
+    async fn next_msg<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> bool {
         let mut cnt = self.cnt.lock().unwrap();
-        let msg: &mut MyResponseMut =
-            unsafe { &mut *(&mut msg as *mut T::Mut<'_> as *mut MyResponseMut) };
-        if *cnt == 3 {
-            return false;
+
+        unsafe {
+            let wrapper_ptr = msg as *mut dyn RecvMessage as *mut ProtoMessageMut<MyResponseMut>;
+            let wrapper = &mut *wrapper_ptr;
+            let inner_msg = &mut wrapper.0;
+            if *cnt == 3 {
+                return false;
+            }
+            *cnt += 1;
+            inner_msg.set_result(*cnt);
         }
-        *cnt += 1;
-        msg.set_result(*cnt);
         true
     }
 

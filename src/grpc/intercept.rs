@@ -20,11 +20,11 @@ where
     C: Call,
     I: CallInterceptor,
 {
-    fn call<E: Encoder, D: Decoder>(
+    fn call(
         &self,
-        descriptor: MethodDescriptor<E, D>,
+        descriptor: MethodDescriptor,
         args: Args,
-    ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send {
+    ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send {
         self.interceptor.call(descriptor, args, &self.call)
     }
 }
@@ -41,11 +41,11 @@ impl<C, I> InterceptorOnce<C, I> {
 }
 
 impl<C: CallOnce, I: CallInterceptorOnce> CallOnce for InterceptorOnce<C, I> {
-    fn call<E: Encoder, D: Decoder>(
+    fn call(
         self,
-        descriptor: MethodDescriptor<E, D>,
+        descriptor: MethodDescriptor,
         args: Args,
-    ) -> impl Future<Output = (impl SendStream<E>, impl RecvStream<D>)> + Send {
+    ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send {
         self.interceptor.call(descriptor, args, self.call)
     }
 }

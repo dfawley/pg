@@ -26,6 +26,7 @@ async fn main() {
     bidi(&client).await;
     headers_example(&client).await;
 
+    println!("Adding interceptors...");
     let wrap_chan = channel
         .with_interceptor(FailStatusInterceptor {})
         .with_interceptor(PrintReqInterceptor {});
@@ -83,6 +84,7 @@ async fn unary<C: Call>(client: &MyServiceClientStub<C>) {
         let (a, b) = tokio::join!(f1, f2);
         println!("Joined: {:?}, {:?}", a, b);
     }
+    println!();
 }
 
 async fn bidi<C: Call>(client: &MyServiceClientStub<C>) {
@@ -96,6 +98,7 @@ async fn bidi<C: Call>(client: &MyServiceClientStub<C>) {
             println!("stream: {:?}", res);
         }
     }
+    println!();
 }
 
 async fn headers_example<C: Call>(client: &MyServiceClientStub<C>) {
@@ -124,6 +127,7 @@ async fn headers_example<C: Call>(client: &MyServiceClientStub<C>) {
         }
         println!("Response: {:?}", res);
     }
+    println!();
 }
 
 mod header_reader {
@@ -146,12 +150,12 @@ mod header_reader {
     }
 
     impl CallInterceptorOnce for HeaderReader {
-        async fn call<C: CallOnce, E: Encoder, D: Decoder>(
+        async fn call<C: CallOnce>(
             self,
-            descriptor: MethodDescriptor<E, D>,
+            descriptor: MethodDescriptor,
             args: Args,
             next: C,
-        ) -> (impl SendStream<E>, impl RecvStream<D>) {
+        ) -> (impl SendStream, impl RecvStream) {
             let (tx, delegate) = next.call(descriptor, args).await;
             (
                 tx,
@@ -168,11 +172,8 @@ mod header_reader {
         delegate: Delegate,
     }
 
-    impl<Delegate> HeaderReaderRecvStream<Delegate> {
-        async fn check_headers<D: Decoder>(&mut self)
-        where
-            Delegate: RecvStream<D>,
-        {
+    impl<Delegate: RecvStream> HeaderReaderRecvStream<Delegate> {
+        async fn check_headers(&mut self) {
             if let Some(tx) = self.tx.take() {
                 let headers = self.delegate.headers().await;
                 if let Some(h) = headers {
@@ -182,7 +183,7 @@ mod header_reader {
         }
     }
 
-    impl<D: Decoder, Delegate: RecvStream<D>> RecvStream<D> for HeaderReaderRecvStream<Delegate> {
+    impl<Delegate: RecvStream> RecvStream for HeaderReaderRecvStream<Delegate> {
         async fn headers(&mut self) -> Option<Headers> {
             let headers = self.delegate.headers().await;
             if let Some(tx) = self.tx.take()
@@ -192,7 +193,7 @@ mod header_reader {
             }
             headers
         }
-        async fn next_msg<'a>(&'a mut self, msg: D::Mut<'a>) -> bool {
+        async fn next_msg<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> bool {
             self.check_headers().await;
             self.delegate.next_msg(msg).await
         }
@@ -214,12 +215,12 @@ mod header_reader {
     }
 
     impl CallInterceptorOnce for HeaderReader2 {
-        async fn call<C: CallOnce, E: Encoder, D: Decoder>(
+        async fn call<C: CallOnce>(
             self,
-            descriptor: MethodDescriptor<E, D>,
+            descriptor: MethodDescriptor,
             args: Args,
             next: C,
-        ) -> (impl SendStream<E>, impl RecvStream<D>) {
+        ) -> (impl SendStream, impl RecvStream) {
             let (rxtx, rxrx) = oneshot::channel();
 
             let (tx, mut rx) = next.call(descriptor, args).await;
@@ -252,11 +253,11 @@ mod header_reader {
         }
     }
 
-    impl<D: Decoder, Delegate: RecvStream<D>> RecvStream<D> for HeaderReader2RecvStream<Delegate> {
+    impl<Delegate: RecvStream> RecvStream for HeaderReader2RecvStream<Delegate> {
         async fn headers(&mut self) -> Option<Headers> {
             self.delegate().await.headers().await
         }
-        async fn next_msg<'a>(&'a mut self, msg: D::Mut<'a>) -> bool {
+        async fn next_msg<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> bool {
             self.delegate().await.next_msg(msg).await
         }
         async fn trailers(self) -> Trailers {
@@ -270,23 +271,17 @@ mod header_reader {
 }
 
 mod interceptor {
-    use std::any::TypeId;
-    use std::marker::PhantomData;
-
-    use crate::gencode::pb::MyRequest;
-    use crate::gencode::pb::MyRequestView;
     use crate::grpc::*;
-    use crate::grpc_protobuf::ProtoEncoder;
 
     pub struct FailStatusInterceptor {}
 
     impl CallInterceptor for FailStatusInterceptor {
-        async fn call<C: CallOnce, E: Encoder, D: Decoder>(
+        async fn call<C: CallOnce>(
             &self,
-            descriptor: MethodDescriptor<E, D>,
+            descriptor: MethodDescriptor,
             args: Args,
             next: C,
-        ) -> (impl SendStream<E>, impl RecvStream<D>) {
+        ) -> (impl SendStream, impl RecvStream) {
             let (tx, rx) = next.call(descriptor, args).await;
             (tx, FailingRecvStreamInterceptor { delegate: rx })
         }
@@ -296,11 +291,11 @@ mod interceptor {
         delegate: Delegate,
     }
 
-    impl<D: Decoder, Delegate: RecvStream<D>> RecvStream<D> for FailingRecvStreamInterceptor<Delegate> {
+    impl<Delegate: RecvStream> RecvStream for FailingRecvStreamInterceptor<Delegate> {
         async fn headers(&mut self) -> Option<Headers> {
             self.delegate.headers().await
         }
-        async fn next_msg<'a>(&'a mut self, msg: D::Mut<'a>) -> bool {
+        async fn next_msg<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> bool {
             self.delegate.next_msg(msg).await
         }
         async fn trailers(self) -> Trailers {
@@ -313,49 +308,41 @@ mod interceptor {
     pub struct PrintReqInterceptor {}
 
     impl CallInterceptor for PrintReqInterceptor {
-        async fn call<C: CallOnce, E: Encoder, D: Decoder>(
+        async fn call<C: CallOnce>(
             &self,
-            descriptor: MethodDescriptor<E, D>,
+            descriptor: MethodDescriptor,
             args: Args,
             next: C,
-        ) -> (impl SendStream<E>, impl RecvStream<D>) {
+        ) -> (impl SendStream, impl RecvStream) {
             let (tx, rx) = next.call(descriptor, args).await;
-            (
-                PrintReqSendStreamInterceptor {
-                    delegate: tx,
-                    encoder_type: PhantomData,
-                },
-                rx,
-            )
+            (PrintReqSendStreamInterceptor { delegate: tx }, rx)
         }
     }
 
-    pub struct PrintReqSendStreamInterceptor<E, Delegate> {
+    pub struct PrintReqSendStreamInterceptor<Delegate> {
         delegate: Delegate,
-        encoder_type: PhantomData<E>,
     }
 
-    impl<E: Encoder, Delegate: SendStream<E>> PrintReqSendStreamInterceptor<E, Delegate> {
-        fn send_common(&self, msg: &E::View<'_>) {
-            if TypeId::of::<E>() == TypeId::of::<ProtoEncoder<MyRequest>>() {
+    impl<Delegate: SendStream> PrintReqSendStreamInterceptor<Delegate> {
+        fn send_common(&self, _msg: &dyn SendMessage) {
+            /* TODO
+            if msg.type_id() == TypeId::of::<ProtoMessageView<MyRequest>>() {
                 // Print a field to show message inspection.
-                let req: &MyRequestView =
-                    unsafe { &*(msg as *const E::View<'_> as *const MyRequestView) };
+                let req: &MyRequestView = unsafe { &*(msg as *const MyRequestView) };
                 println!("Saw request query value: {}", req.query());
             }
+            */
         }
     }
 
-    impl<E: Encoder, Delegate: SendStream<E>> SendStream<E>
-        for PrintReqSendStreamInterceptor<E, Delegate>
-    {
-        async fn send_msg<'a>(&'a mut self, msg: E::View<'a>) -> bool {
-            self.send_common(&msg);
+    impl<Delegate: SendStream> SendStream for PrintReqSendStreamInterceptor<Delegate> {
+        async fn send_msg<'a>(&'a mut self, msg: &'a dyn SendMessage) -> bool {
+            self.send_common(msg);
             self.delegate.send_msg(msg).await
         }
 
-        async fn send_and_close<'a>(&'a mut self, msg: E::View<'a>) {
-            self.send_common(&msg);
+        async fn send_and_close<'a>(&'a mut self, msg: &'a dyn SendMessage) {
+            self.send_common(msg);
             self.delegate.send_and_close(msg).await
         }
     }
