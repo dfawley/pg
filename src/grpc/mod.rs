@@ -57,7 +57,7 @@ pub trait RecvMessage: Send + Sync {
 /// SendStream represents the sending side of a client stream.  Dropping the
 /// SendStream or calling send_and_close results in a signal the server can use
 /// to determine the client is done sending requests.
-pub trait SendStream: Send + Sync + 'static {
+pub trait SendStream: Send {
     /// Sends msg on the stream.  If false is returned, the message could not be
     /// delivered because the stream was closed.  Future calls to SendStream
     /// will do nothing.
@@ -85,7 +85,7 @@ pub enum RecvStreamItem {
 /// RecvStream represents the receiving side of a client stream.  Dropping the
 /// RecvStream results in early RPC cancellation if the server has not already
 /// terminated the stream first.
-pub trait RecvStream: Send + Sync + 'static {
+pub trait RecvStream: Send {
     /// Returns the next item on the response stream, or None if the stream has
     /// finished.  If the item is Message, then RecvMessage has received the
     /// contents of a message.

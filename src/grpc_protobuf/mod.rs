@@ -2,8 +2,7 @@ use async_stream::stream;
 use futures_core::Stream;
 use futures_util::{StreamExt, stream::select};
 use protobuf::{
-    AsMut, AsView, ClearAndParse, Message, MessageMut, MessageView, MutProxied, Proxied, Serialize,
-    ViewProxy,
+    AsMut, AsView, ClearAndParse, Message, MessageMut, MessageView, Proxied, Serialize, ViewProxy,
 };
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -53,11 +52,9 @@ where
 
     pub async fn with_response_message<ResMsgMut>(self, res: &mut ResMsgMut) -> Status
     where
-        ResMsgMut: AsMut<MutProxied = Res> + Send + Sync,
-        for<'b> Res::Mut<'b>: Send + ClearAndParse,
-        for<'b> <Res as MutProxied>::Mut<'b>: MessageMut<'b>,
-        for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>:
-            MessageView<'b> + Send + Sync,
+        ResMsgMut: AsMut<MutProxied = Res>,
+        for<'b> Res::Mut<'b>: ClearAndParse + Send,
+        for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>: MessageView<'b>,
     {
         let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
         tx.send_and_close(&ProtoMessageView(self.req.as_view(), PhantomData) as &dyn SendMessage)
@@ -75,11 +72,10 @@ where
 impl<'a, C, Res, ReqMsgView> IntoFuture for UnaryCall<'a, C, Res, ReqMsgView>
 where
     C: CallOnce + 'a,
-    Res: Message + 'static,
+    Res: Message,
+    for<'b> Res::Mut<'b>: ClearAndParse + Send,
     ReqMsgView: AsView + Send + Sync + 'a,
-    for<'b> Res::Mut<'b>: Send + ClearAndParse,
-    for<'b> <Res as MutProxied>::Mut<'b>: MessageMut<'b>,
-    for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>: MessageView<'b> + Send + Sync,
+    for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>: MessageView<'b>,
 {
     type Output = Result<Res, Status>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
@@ -132,12 +128,10 @@ impl<'a, C, ReqStream, Res> IntoFuture for BidiCall<'a, C, ReqStream, Res>
 where
     C: CallOnce + 'a,
     ReqStream: Unpin + Stream + Send + 'a,
-    ReqStream::Item: Message + Send + Sync + 'static,
-    for<'b> <ReqStream::Item as Proxied>::View<'b>: Send + Serialize,
-    Res: Message + 'static,
-    for<'b> Res::Mut<'b>: Send + ClearAndParse,
-    for<'b> <<ReqStream as Stream>::Item as Proxied>::View<'b>: MessageView<'b>,
-    for<'b> <Res as MutProxied>::Mut<'b>: MessageMut<'b>,
+    ReqStream::Item: Message,
+    for<'b> <ReqStream::Item as Proxied>::View<'b>: MessageView<'b>,
+    Res: Message,
+    for<'b> Res::Mut<'b>: Send + MessageMut<'b>,
 {
     type Output = Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send + 'a>>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
