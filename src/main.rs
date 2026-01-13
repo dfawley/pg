@@ -115,26 +115,11 @@ async fn headers_example<C: Call>(client: &MyServiceClientStub<C>) {
         println!("Response: {:?}", res);
     }
 
-    {
-        let (i, rx) = HeaderReader2::new();
-        let res = client
-            .unary_call(proto!(MyRequest { query: 1 }))
-            .with_interceptor(i)
-            .await;
-        match rx.await {
-            Ok(v) => println!("saw headers: {:?}", v),
-            Err(_) => println!("RPC finished as trailers-only"),
-        }
-        println!("Response: {:?}", res);
-    }
     println!();
 }
 
 mod header_reader {
-    use tokio::{
-        spawn,
-        sync::oneshot::{self, Receiver, Sender},
-    };
+    use tokio::sync::oneshot::{self, Receiver, Sender};
 
     use crate::grpc::*;
 
@@ -172,100 +157,15 @@ mod header_reader {
         delegate: Delegate,
     }
 
-    impl<Delegate: RecvStream> HeaderReaderRecvStream<Delegate> {
-        async fn check_headers(&mut self) {
-            if let Some(tx) = self.tx.take() {
-                let headers = self.delegate.headers().await;
-                if let Some(h) = headers {
-                    let _ = tx.send(h);
-                }
-            }
-        }
-    }
-
     impl<Delegate: RecvStream> RecvStream for HeaderReaderRecvStream<Delegate> {
-        async fn headers(&mut self) -> Option<Headers> {
-            let headers = self.delegate.headers().await;
-            if let Some(tx) = self.tx.take()
-                && let Some(h) = headers.clone()
+        async fn next<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> Option<RecvStreamItem> {
+            let i = self.delegate.next(msg).await;
+            if let Some(RecvStreamItem::Headers(h)) = &i
+                && let Some(tx) = self.tx.take()
             {
-                let _ = tx.send(h);
+                let _ = tx.send(h.clone());
             }
-            headers
-        }
-        async fn next_msg<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> bool {
-            self.check_headers().await;
-            self.delegate.next_msg(msg).await
-        }
-        async fn trailers(mut self) -> Trailers {
-            self.check_headers().await;
-            self.delegate.trailers().await
-        }
-    }
-
-    pub struct HeaderReader2 {
-        tx: Sender<Headers>,
-    }
-
-    impl HeaderReader2 {
-        pub fn new() -> (Self, Receiver<Headers>) {
-            let (tx, rx) = oneshot::channel();
-            (Self { tx }, rx)
-        }
-    }
-
-    impl CallInterceptorOnce for HeaderReader2 {
-        async fn call<C: CallOnce>(
-            self,
-            descriptor: MethodDescriptor,
-            args: Args,
-            next: C,
-        ) -> (impl SendStream, impl RecvStream) {
-            let (rxtx, rxrx) = oneshot::channel();
-
-            let (tx, mut rx) = next.call(descriptor, args).await;
-            spawn(async move {
-                let headers = rx.headers().await;
-                if let Some(h) = headers {
-                    let _ = self.tx.send(h);
-                }
-                let _ = rxtx.send(rx);
-            });
-            (tx, HeaderReader2RecvStream::Waiting(rxrx))
-        }
-    }
-
-    pub enum HeaderReader2RecvStream<Delegate> {
-        Waiting(Receiver<Delegate>),
-        Ready(Delegate),
-    }
-
-    impl<Delegate> HeaderReader2RecvStream<Delegate> {
-        async fn delegate(&mut self) -> &mut Delegate {
-            if let HeaderReader2RecvStream::Waiting(rx) = self {
-                *self = HeaderReader2RecvStream::Ready(rx.await.unwrap());
-            }
-
-            if let HeaderReader2RecvStream::Ready(d) = self {
-                return d;
-            };
-            unreachable!();
-        }
-    }
-
-    impl<Delegate: RecvStream> RecvStream for HeaderReader2RecvStream<Delegate> {
-        async fn headers(&mut self) -> Option<Headers> {
-            self.delegate().await.headers().await
-        }
-        async fn next_msg<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> bool {
-            self.delegate().await.next_msg(msg).await
-        }
-        async fn trailers(self) -> Trailers {
-            let delegate = match self {
-                Self::Ready(d) => d,
-                Self::Waiting(rx) => rx.await.unwrap(),
-            };
-            delegate.trailers().await
+            i
         }
     }
 }
@@ -292,16 +192,13 @@ mod interceptor {
     }
 
     impl<Delegate: RecvStream> RecvStream for FailingRecvStreamInterceptor<Delegate> {
-        async fn headers(&mut self) -> Option<Headers> {
-            self.delegate.headers().await
-        }
-        async fn next_msg<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> bool {
-            self.delegate.next_msg(msg).await
-        }
-        async fn trailers(self) -> Trailers {
-            let mut trailers = self.delegate.trailers().await;
-            trailers.status.code = 3;
-            trailers
+        async fn next<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> Option<RecvStreamItem> {
+            let i = self.delegate.next(msg).await;
+            if let Some(RecvStreamItem::Trailers(mut t)) = i {
+                t.status.code = 3;
+                return Some(RecvStreamItem::Trailers(t));
+            }
+            i
         }
     }
 

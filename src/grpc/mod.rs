@@ -76,25 +76,23 @@ pub trait SendStream: Send + Sync + 'static {
     ) -> impl Future<Output = ()> + Send + 'a;
 }
 
+pub enum RecvStreamItem {
+    Headers(Headers),
+    Message,
+    Trailers(Trailers),
+}
+
 /// RecvStream represents the receiving side of a client stream.  Dropping the
 /// RecvStream results in early RPC cancellation if the server has not already
 /// terminated the stream first.
 pub trait RecvStream: Send + Sync + 'static {
-    /// Returns the response stream's headers, or None if a trailers-only
-    /// response is received.
-    fn headers(&mut self) -> impl Future<Output = Option<Headers>> + Send;
-
-    /// Receives the next message on the stream into msg.  If false is returned,
-    /// msg is unmodified, the stream has finished, and trailers should be
-    /// called to receive the trailers from the stream.
-    fn next_msg<'a>(
+    /// Returns the next item on the response stream, or None if the stream has
+    /// finished.  If the item is Message, then RecvMessage has received the
+    /// contents of a message.
+    fn next<'a>(
         &'a mut self,
         msg: &'a mut dyn RecvMessage,
-    ) -> impl Future<Output = bool> + Send + 'a;
-
-    /// Returns the trailers for the stream, consuming the stream and any
-    /// unreceived messages preceding the trailers.
-    fn trailers(self) -> impl Future<Output = Trailers> + Send;
+    ) -> impl Future<Output = Option<RecvStreamItem>> + Send + 'a;
 }
 
 /// Call begins the dispatching of an RPC.

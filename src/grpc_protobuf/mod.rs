@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use crate::grpc::{
     Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, MethodDescriptor, RecvMessage,
-    RecvStream, SendMessage, SendStream, Status,
+    RecvStream, RecvStreamItem, SendMessage, SendStream, Status,
 };
 
 pub struct UnaryCall<'a, C, Res, ReqMsgView> {
@@ -62,9 +62,13 @@ where
         let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
         tx.send_and_close(&ProtoMessageView(self.req.as_view(), PhantomData) as &dyn SendMessage)
             .await;
-        rx.next_msg(&mut ProtoMessageMut(res.as_mut()) as &mut dyn RecvMessage)
-            .await;
-        rx.trailers().await.status
+        let mut msg = ProtoMessageMut(res.as_mut());
+        loop {
+            let i = rx.next(&mut msg).await.unwrap();
+            if let RecvStreamItem::Trailers(t) = i {
+                return t.status;
+            }
+        }
     }
 }
 
@@ -89,14 +93,16 @@ where
             .await;
 
             let mut res = Res::default();
-            rx.next_msg(&mut ProtoMessageMut(res.as_mut()) as &mut dyn RecvMessage)
-                .await;
-
-            let status = rx.trailers().await.status;
-            if status.code != 0 {
-                Err(status)
-            } else {
-                Ok(res)
+            let mut msg = ProtoMessageMut(res.as_mut());
+            loop {
+                let i = rx.next(&mut msg).await.unwrap();
+                if let RecvStreamItem::Trailers(t) = i {
+                    if t.status.code == 0 {
+                        drop(msg);
+                        return Ok(res);
+                    }
+                    return Err(t.status);
+                }
             }
         })
     }
@@ -157,10 +163,11 @@ where
             let receiver = stream! {
                 loop {
                     let mut res = Res::default();
-                    if rx.next_msg(&mut ProtoMessageMut(res.as_mut()) as &mut dyn RecvMessage).await {
+                    let i = rx.next(&mut ProtoMessageMut(res.as_mut()) as &mut dyn RecvMessage).await;
+                    if let Some(RecvStreamItem::Message) = i {
                         yield Ok(res);
-                    } else {
-                        yield Err(rx.trailers().await.status);
+                    } else if let Some(RecvStreamItem::Trailers(t)) = i {
+                        yield Err(t.status);
                         return;
                     }
                 }

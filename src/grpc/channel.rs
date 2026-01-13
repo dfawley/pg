@@ -18,7 +18,10 @@ impl Call for Channel {
         );
         (
             ChannelSendStream {},
-            ChannelRecvStream { cnt: Mutex::new(0) },
+            ChannelRecvStream {
+                state: Some(RecvStreamItem::Headers(Headers {})),
+                cnt: Default::default(),
+            },
         )
     }
 }
@@ -40,33 +43,35 @@ impl SendStream for ChannelSendStream {
 }
 
 pub struct ChannelRecvStream {
+    state: Option<RecvStreamItem>,
     cnt: Mutex<i32>,
 }
 
 impl RecvStream for ChannelRecvStream {
-    async fn headers(&mut self) -> Option<Headers> {
-        Some(Headers {})
-    }
-
-    async fn next_msg<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> bool {
-        let mut cnt = self.cnt.lock().unwrap();
-
-        unsafe {
-            let wrapper_ptr = msg as *mut dyn RecvMessage as *mut ProtoMessageMut<MyResponseMut>;
-            let wrapper = &mut *wrapper_ptr;
-            let inner_msg = &mut wrapper.0;
-            if *cnt == 3 {
-                return false;
+    async fn next<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> Option<RecvStreamItem> {
+        let ret = self.state.take();
+        if let Some(RecvStreamItem::Headers(_)) = &ret {
+            self.state = Some(RecvStreamItem::Message);
+        }
+        if let Some(RecvStreamItem::Message) = &ret {
+            let mut cnt = self.cnt.lock().unwrap();
+            unsafe {
+                let wrapper_ptr =
+                    msg as *mut dyn RecvMessage as *mut ProtoMessageMut<MyResponseMut>;
+                let wrapper = &mut *wrapper_ptr;
+                let inner_msg = &mut wrapper.0;
+                if *cnt == 2 {
+                    // Last message; next time return trailers.
+                    self.state = Some(RecvStreamItem::Trailers(Trailers {
+                        status: Status::ok(),
+                    }));
+                } else {
+                    self.state = Some(RecvStreamItem::Message);
+                }
+                *cnt += 1;
+                inner_msg.set_result(*cnt);
             }
-            *cnt += 1;
-            inner_msg.set_result(*cnt);
         }
-        true
-    }
-
-    async fn trailers(self) -> Trailers {
-        Trailers {
-            status: Status::ok(),
-        }
+        ret
     }
 }
