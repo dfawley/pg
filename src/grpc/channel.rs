@@ -2,7 +2,7 @@ use std::sync::Mutex;
 use std::time;
 
 use crate::gencode::pb::*;
-use crate::grpc_protobuf::ProtoMessageMut;
+use crate::grpc_protobuf::downcast_proto_mut;
 
 use super::*;
 
@@ -56,11 +56,7 @@ impl RecvStream for ChannelRecvStream {
             }
             Some(RecvStreamItem::Message) => {
                 let mut cnt = self.cnt.lock().unwrap();
-                unsafe {
-                    let wrapper_ptr =
-                        msg as *mut dyn RecvMessage as *mut ProtoMessageMut<MyResponseMut>;
-                    let wrapper = &mut *wrapper_ptr;
-                    let inner_msg = &mut wrapper.0;
+                if let Some(inner_msg) = downcast_proto_mut::<MyResponse>(msg) {
                     if *cnt == 2 {
                         // Last message; next time return trailers.
                         self.state = Some(RecvStreamItem::Trailers(Trailers {
@@ -71,6 +67,8 @@ impl RecvStream for ChannelRecvStream {
                     }
                     *cnt += 1;
                     inner_msg.set_result(*cnt);
+                } else {
+                    panic!();
                 }
             }
             _ => {}

@@ -2,11 +2,12 @@ use async_stream::stream;
 use futures_core::Stream;
 use futures_util::{StreamExt, stream::select};
 use protobuf::{
-    AsMut, AsView, ClearAndParse, Message, MessageMut, MessageView, Proxied, Serialize, ViewProxy,
+    AsMut, AsView, ClearAndParse, Message, MessageMut, MessageView, MutProxied, MutProxy, Proxied,
+    Serialize,
 };
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::time::Duration;
+use std::{any::TypeId, marker::PhantomData};
 
 use crate::grpc::{
     Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, MethodDescriptor, RecvMessage,
@@ -54,12 +55,14 @@ where
     where
         ResMsgMut: AsMut<MutProxied = Res>,
         for<'b> Res::Mut<'b>: ClearAndParse + Send,
+        <ReqMsgView as AsView>::Proxied: Message + 'static,
         for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>: MessageView<'b>,
     {
         let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
-        tx.send_and_close(&ProtoMessageView(self.req.as_view(), PhantomData) as &dyn SendMessage)
-            .await;
-        let mut msg = ProtoMessageMut(res.as_mut());
+        let v: &(dyn SendMessage + '_) =
+            &ProtoMessageView::<ReqMsgView::Proxied>(self.req.as_view(), PhantomData);
+        tx.send_and_close(v).await;
+        let mut msg = ProtoMessageMut::<Res>(res.as_mut(), PhantomData);
         loop {
             let i = rx.next(&mut msg).await.unwrap();
             if let RecvStreamItem::Trailers(t) = i {
@@ -72,9 +75,10 @@ where
 impl<'a, C, Res, ReqMsgView> IntoFuture for UnaryCall<'a, C, Res, ReqMsgView>
 where
     C: CallOnce + 'a,
-    Res: Message,
+    Res: Message + 'static,
     for<'b> Res::Mut<'b>: ClearAndParse + Send,
     ReqMsgView: AsView + Send + Sync + 'a,
+    <ReqMsgView as AsView>::Proxied: Message + 'static,
     for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>: MessageView<'b>,
 {
     type Output = Result<Res, Status>;
@@ -83,13 +87,14 @@ where
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
-            tx.send_and_close(
-                &ProtoMessageView(self.req.as_view(), PhantomData) as &dyn SendMessage
-            )
+            tx.send_and_close(&ProtoMessageView::<ReqMsgView::Proxied>(
+                self.req.as_view(),
+                PhantomData,
+            ))
             .await;
 
             let mut res = Res::default();
-            let mut msg = ProtoMessageMut(res.as_mut());
+            let mut msg = ProtoMessageMut::<Res>(res.as_mut(), PhantomData);
             loop {
                 let i = rx.next(&mut msg).await.unwrap();
                 if let RecvStreamItem::Trailers(t) = i {
@@ -128,9 +133,9 @@ impl<'a, C, ReqStream, Res> IntoFuture for BidiCall<'a, C, ReqStream, Res>
 where
     C: CallOnce + 'a,
     ReqStream: Unpin + Stream + Send + 'a,
-    ReqStream::Item: Message,
+    ReqStream::Item: Message + 'static,
     for<'b> <ReqStream::Item as Proxied>::View<'b>: MessageView<'b>,
-    Res: Message,
+    Res: Message + 'static,
     for<'b> Res::Mut<'b>: Send + MessageMut<'b>,
 {
     type Output = Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send + 'a>>;
@@ -144,7 +149,7 @@ where
             // message to cause the receiver stream to be polled.
             let sender = stream! {
                 while let Some(req) = self.req_stream.next().await {
-                    if !tx.send_msg(&ProtoMessageView(req.as_view(),PhantomData) as &dyn SendMessage).await {
+                    if !tx.send_msg(&ProtoMessageView::<ReqStream::Item>(req.as_view(), PhantomData)).await {
                         return;
                     }
                     yield None;
@@ -157,7 +162,7 @@ where
             let receiver = stream! {
                 loop {
                     let mut res = Res::default();
-                    let i = rx.next(&mut ProtoMessageMut(res.as_mut()) as &mut dyn RecvMessage).await;
+                    let i = rx.next(&mut ProtoMessageMut::<Res>(res.as_mut(), PhantomData)).await;
                     if let Some(RecvStreamItem::Message) = i {
                         yield Ok(res);
                     } else if let Some(RecvStreamItem::Trailers(t)) = i {
@@ -208,26 +213,74 @@ impl<T: CallArgs> SharedCall for T {
     }
 }
 
-pub struct ProtoMessageView<'a, V>(V, PhantomData<&'a ()>);
+pub struct ProtoMessageView<'a, M: Message + 'static>(
+    pub <M as Proxied>::View<'a>,
+    pub PhantomData<&'a ()>,
+);
 
-impl<'a, V: ViewProxy<'a>> SendMessage for ProtoMessageView<'a, V>
+impl<'a, M> SendMessage for ProtoMessageView<'a, M>
 where
-    V: Serialize + Send + Sync,
+    M: Message + 'static,
+    <M as Proxied>::View<'a>: Serialize + Send + Sync,
 {
     fn encode(&self) -> Vec<Vec<u8>> {
         vec![self.0.serialize().unwrap()]
     }
+
+    fn msg_ptr(&self) -> *const () {
+        &self.0 as *const _ as *const ()
+    }
+
+    fn msg_type_id(&self) -> TypeId {
+        TypeId::of::<M::View<'static>>()
+    }
 }
 
-pub struct ProtoMessageMut<M>(pub M);
+pub struct ProtoMessageMut<'a, M: Message + 'static>(
+    pub <M as MutProxied>::Mut<'a>,
+    pub PhantomData<&'a ()>,
+);
 
-impl<M> RecvMessage for ProtoMessageMut<M>
+impl<'a, M> RecvMessage for ProtoMessageMut<'a, M>
 where
-    M: Send + Sync + ClearAndParse,
+    M: MutProxied + Message + 'static,
+    <M as MutProxied>::Mut<'a>: MutProxy<'a> + Send + Sync + ClearAndParse,
 {
     fn decode(&mut self, data: Vec<Vec<u8>>) {
         self.0
             .clear_and_parse(data.as_slice()[0].as_slice())
             .unwrap();
+    }
+
+    fn msg_ptr(&self) -> *const () {
+        &self.0 as *const _ as *const ()
+    }
+
+    fn msg_type_id(&self) -> TypeId {
+        TypeId::of::<M::Mut<'static>>()
+    }
+}
+
+pub fn downcast_proto_view<'a, T>(msg: &'a dyn SendMessage) -> Option<&'a T::View<'a>>
+where
+    T: Message + 'static,
+{
+    if msg.msg_type_id() == TypeId::of::<T::View<'static>>() {
+        let inner_msg = unsafe { &*(msg.msg_ptr() as *const T::View<'a>) };
+        Some(inner_msg)
+    } else {
+        None
+    }
+}
+
+pub fn downcast_proto_mut<'a, T>(msg: &'a mut dyn RecvMessage) -> Option<&'a mut T::Mut<'a>>
+where
+    T: Message + 'static,
+{
+    if msg.msg_type_id() == TypeId::of::<T::Mut<'static>>() {
+        let inner_msg = unsafe { &mut *(msg.msg_ptr() as *mut T::Mut<'a>) };
+        Some(inner_msg)
+    } else {
+        None
     }
 }

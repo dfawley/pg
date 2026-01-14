@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{any::TypeId, fmt::Debug};
 
 mod intercept;
 pub use intercept::*;
@@ -47,11 +47,15 @@ pub struct MethodDescriptor {
 #[allow(unused)]
 pub trait SendMessage: Send + Sync {
     fn encode(&self) -> Vec<Vec<u8>>;
+    fn msg_ptr(&self) -> *const ();
+    fn msg_type_id(&self) -> TypeId;
 }
 
 #[allow(unused)]
 pub trait RecvMessage: Send + Sync {
     fn decode(&mut self, data: Vec<Vec<u8>>);
+    fn msg_ptr(&self) -> *const ();
+    fn msg_type_id(&self) -> TypeId;
 }
 
 /// SendStream represents the sending side of a client stream.  Dropping the
@@ -85,6 +89,16 @@ pub enum RecvStreamItem {
 /// RecvStream represents the receiving side of a client stream.  Dropping the
 /// RecvStream results in early RPC cancellation if the server has not already
 /// terminated the stream first.
+///
+/// A RecvStream should always return the items exactly as follows:
+///
+/// [Headers *Message] Trailers
+///
+/// That is: optionaly, a Headers value and any number of Message values
+/// (including zero), followed by a required Trailers value.
+///
+/// A RecvStream should not be used after next has returned Trailers, but it
+/// should return None if it is.
 pub trait RecvStream: Send {
     /// Returns the next item on the response stream, or None if the stream has
     /// finished.  If the item is Message, then RecvMessage has received the
