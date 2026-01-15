@@ -64,7 +64,7 @@ where
         tx.send_and_close(v).await;
         let mut msg = ProtoRecvMessage::<Res>(res.as_mut(), PhantomData);
         loop {
-            let i = rx.next(&mut msg).await.unwrap();
+            let i = rx.next(&mut msg).await;
             if let RecvStreamItem::Trailers(t) = i {
                 return t.status;
             }
@@ -96,7 +96,7 @@ where
             let mut res = Res::default();
             let mut msg = ProtoRecvMessage::<Res>(res.as_mut(), PhantomData);
             loop {
-                let i = rx.next(&mut msg).await.unwrap();
+                let i = rx.next(&mut msg).await;
                 if let RecvStreamItem::Trailers(t) = i {
                     if t.status.code == 0 {
                         drop(msg);
@@ -149,7 +149,7 @@ where
             // message to cause the receiver stream to be polled.
             let sender = stream! {
                 while let Some(req) = self.req_stream.next().await {
-                    if !tx.send_msg(&ProtoSendMessage::<ReqStream::Item>(req.as_view(), PhantomData)).await {
+                    if tx.send_msg(&ProtoSendMessage::<ReqStream::Item>(req.as_view(), PhantomData)).await.is_err() {
                         return;
                     }
                     yield None;
@@ -163,9 +163,9 @@ where
                 loop {
                     let mut res = Res::default();
                     let i = rx.next(&mut ProtoRecvMessage::<Res>(res.as_mut(), PhantomData)).await;
-                    if let Some(RecvStreamItem::Message) = i {
+                    if let RecvStreamItem::Message = i {
                         yield Ok(res);
-                    } else if let Some(RecvStreamItem::Trailers(t)) = i {
+                    } else if let RecvStreamItem::Trailers(t) = i {
                         yield Err(t.status);
                         return;
                     }

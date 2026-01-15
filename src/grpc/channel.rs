@@ -34,8 +34,8 @@ pub struct Args {
 pub struct ChannelSendStream {}
 
 impl SendStream for ChannelSendStream {
-    async fn send_msg<'a>(&'a mut self, _msg: &'a dyn SendMessage) -> bool {
-        true // false on error sending
+    async fn send_msg<'a>(&'a mut self, _msg: &'a dyn SendMessage) -> Result<(), ()> {
+        Ok(()) // Err(()) on error sending
     }
     async fn send_and_close<'a>(&'a mut self, _msg: &'a dyn SendMessage) {
         // Error doesn't matter when sending final message.
@@ -48,7 +48,7 @@ pub struct ChannelRecvStream {
 }
 
 impl RecvStream for ChannelRecvStream {
-    async fn next<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> Option<RecvStreamItem> {
+    async fn next<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> RecvStreamItem {
         let ret = self.state.take();
         match ret {
             Some(RecvStreamItem::Headers(_)) => {
@@ -73,6 +73,10 @@ impl RecvStream for ChannelRecvStream {
             }
             _ => {}
         }
-        ret
+        if let Some(ret) = ret {
+            ret
+        } else {
+            RecvStreamItem::StreamClosed
+        }
     }
 }

@@ -158,9 +158,9 @@ mod header_reader {
     }
 
     impl<Delegate: RecvStream> RecvStream for HeaderReaderRecvStream<Delegate> {
-        async fn next<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> Option<RecvStreamItem> {
+        async fn next<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> RecvStreamItem {
             let i = self.delegate.next(msg).await;
-            if let Some(RecvStreamItem::Headers(h)) = &i
+            if let RecvStreamItem::Headers(h) = &i
                 && let Some(tx) = self.tx.take()
             {
                 let _ = tx.send(h.clone());
@@ -192,11 +192,11 @@ mod interceptor {
     }
 
     impl<Delegate: RecvStream> RecvStream for FailingRecvStreamInterceptor<Delegate> {
-        async fn next<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> Option<RecvStreamItem> {
+        async fn next<'a>(&'a mut self, msg: &'a mut dyn RecvMessage) -> RecvStreamItem {
             let i = self.delegate.next(msg).await;
-            if let Some(RecvStreamItem::Trailers(mut t)) = i {
+            if let RecvStreamItem::Trailers(mut t) = i {
                 t.status.code = 3;
-                return Some(RecvStreamItem::Trailers(t));
+                return RecvStreamItem::Trailers(t);
             }
             i
         }
@@ -229,7 +229,7 @@ mod interceptor {
     }
 
     impl<Delegate: SendStream> SendStream for PrintReqSendStreamInterceptor<Delegate> {
-        async fn send_msg<'a>(&'a mut self, msg: &'a dyn SendMessage) -> bool {
+        async fn send_msg<'a>(&'a mut self, msg: &'a dyn SendMessage) -> Result<(), ()> {
             self.send_common(msg);
             self.delegate.send_msg(msg).await
         }

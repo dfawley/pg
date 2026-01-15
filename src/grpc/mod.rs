@@ -64,10 +64,13 @@ pub trait RecvMessage: Send + Sync {
     }
 }
 
+/// A MessageType describes what underlying message is inside a SendMessage or
+/// RecvMessage so that it can be downcast, e.g. by interceptors.  It allows for
+/// safe downcasting to views containing a lifetime.
 pub trait MessageType {
-    // The message view's type, which may have a lifetime.
+    /// The message view's type, which may have a lifetime.
     type Target<'a>;
-    // The 'static TypeId of the message view.
+    /// The 'static TypeId of the message view.
     fn type_id() -> TypeId;
 }
 
@@ -101,7 +104,7 @@ pub trait SendStream: Send {
     fn send_msg<'a>(
         &'a mut self,
         msg: &'a dyn SendMessage,
-    ) -> impl Future<Output = bool> + Send + 'a;
+    ) -> impl Future<Output = Result<(), ()>> + Send + 'a;
 
     /// Sends msg on the stream and indicates the client has no further messages
     /// to send.
@@ -117,6 +120,7 @@ pub enum RecvStreamItem {
     Headers(Headers),
     Message,
     Trailers(Trailers),
+    StreamClosed,
 }
 
 /// RecvStream represents the receiving side of a client stream.  Dropping the
@@ -125,13 +129,12 @@ pub enum RecvStreamItem {
 ///
 /// A RecvStream should always return the items exactly as follows:
 ///
-/// [Headers *Message] Trailers
+/// [Headers *Message] Trailers *StreamClosed
 ///
 /// That is: optionaly, a Headers value and any number of Message values
-/// (including zero), followed by a required Trailers value.
-///
-/// A RecvStream should not be used after next has returned Trailers, but it
-/// should return None if it is.
+/// (including zero), followed by a required Trailers value.  A RecvStream
+/// should not be used after next has returned Trailers, but it should return
+/// StreamClosed if it is.
 pub trait RecvStream: Send {
     /// Returns the next item on the response stream, or None if the stream has
     /// finished.  If the item is Message, then RecvMessage has received the
@@ -139,7 +142,7 @@ pub trait RecvStream: Send {
     fn next<'a>(
         &'a mut self,
         msg: &'a mut dyn RecvMessage,
-    ) -> impl Future<Output = Option<RecvStreamItem>> + Send + 'a;
+    ) -> impl Future<Output = RecvStreamItem> + Send + 'a;
 }
 
 /// Call begins the dispatching of an RPC.
