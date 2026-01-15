@@ -2,7 +2,7 @@ use std::sync::Mutex;
 use std::time;
 
 use crate::gencode::pb::*;
-use crate::grpc_protobuf::downcast_proto_mut;
+use crate::grpc_protobuf::ProtoRecvMessage;
 
 use super::*;
 
@@ -56,7 +56,7 @@ impl RecvStream for ChannelRecvStream {
             }
             Some(RecvStreamItem::Message) => {
                 let mut cnt = self.cnt.lock().unwrap();
-                if let Some(inner_msg) = downcast_proto_mut::<MyResponse>(msg) {
+                if let Some(inner_msg) = msg.downcast_mut::<ProtoRecvMessage<MyResponse>>() {
                     if *cnt == 2 {
                         // Last message; next time return trailers.
                         self.state = Some(RecvStreamItem::Trailers(Trailers {

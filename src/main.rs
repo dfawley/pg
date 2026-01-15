@@ -171,7 +171,7 @@ mod header_reader {
 }
 
 mod interceptor {
-    use crate::{gencode::pb::MyRequest, grpc::*, grpc_protobuf::downcast_proto_view};
+    use crate::{gencode::pb::MyRequest, grpc::*, grpc_protobuf::ProtoSendMessage};
 
     pub struct FailStatusInterceptor {}
 
@@ -222,7 +222,7 @@ mod interceptor {
 
     impl<Delegate: SendStream> PrintReqSendStreamInterceptor<Delegate> {
         fn send_common(&self, msg: &dyn SendMessage) {
-            if let Some(req) = downcast_proto_view::<MyRequest>(msg) {
+            if let Some(req) = msg.downcast_ref::<ProtoSendMessage<MyRequest>>() {
                 println!("Saw request query value: {}", req.query());
             }
         }

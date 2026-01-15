@@ -47,15 +47,48 @@ pub struct MethodDescriptor {
 #[allow(unused)]
 pub trait SendMessage: Send + Sync {
     fn encode(&self) -> Vec<Vec<u8>>;
-    fn msg_ptr(&self) -> *const ();
-    fn msg_type_id(&self) -> TypeId;
+
+    #[doc(hidden)]
+    fn _ptr_for(&self, id: TypeId) -> Option<*const ()> {
+        None
+    }
 }
 
 #[allow(unused)]
 pub trait RecvMessage: Send + Sync {
     fn decode(&mut self, data: Vec<Vec<u8>>);
-    fn msg_ptr(&self) -> *const ();
-    fn msg_type_id(&self) -> TypeId;
+
+    #[doc(hidden)]
+    fn _ptr_for(&mut self, id: TypeId) -> Option<*mut ()> {
+        None
+    }
+}
+
+pub trait MessageType {
+    // The message view's type, which may have a lifetime.
+    type Target<'a>;
+    // The 'static TypeId of the message view.
+    fn type_id() -> TypeId;
+}
+
+impl dyn SendMessage + '_ {
+    pub fn downcast_ref<T: MessageType>(&self) -> Option<&T::Target<'_>> {
+        if let Some(ptr) = self._ptr_for(T::type_id()) {
+            unsafe { Some(&*(ptr as *mut T::Target<'_>)) }
+        } else {
+            None
+        }
+    }
+}
+
+impl dyn RecvMessage + '_ {
+    pub fn downcast_mut<T: MessageType>(&mut self) -> Option<&mut T::Target<'_>> {
+        if let Some(ptr) = self._ptr_for(T::type_id()) {
+            unsafe { Some(&mut *(ptr as *mut T::Target<'_>)) }
+        } else {
+            None
+        }
+    }
 }
 
 /// SendStream represents the sending side of a client stream.  Dropping the

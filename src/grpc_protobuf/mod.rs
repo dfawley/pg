@@ -10,8 +10,8 @@ use std::time::Duration;
 use std::{any::TypeId, marker::PhantomData};
 
 use crate::grpc::{
-    Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, MethodDescriptor, RecvMessage,
-    RecvStream, RecvStreamItem, SendMessage, SendStream, Status,
+    Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, MessageType, MethodDescriptor,
+    RecvMessage, RecvStream, RecvStreamItem, SendMessage, SendStream, Status,
 };
 
 pub struct UnaryCall<'a, C, Res, ReqMsgView> {
@@ -60,9 +60,9 @@ where
     {
         let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
         let v: &(dyn SendMessage + '_) =
-            &ProtoMessageView::<ReqMsgView::Proxied>(self.req.as_view(), PhantomData);
+            &ProtoSendMessage::<ReqMsgView::Proxied>(self.req.as_view(), PhantomData);
         tx.send_and_close(v).await;
-        let mut msg = ProtoMessageMut::<Res>(res.as_mut(), PhantomData);
+        let mut msg = ProtoRecvMessage::<Res>(res.as_mut(), PhantomData);
         loop {
             let i = rx.next(&mut msg).await.unwrap();
             if let RecvStreamItem::Trailers(t) = i {
@@ -87,14 +87,14 @@ where
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
-            tx.send_and_close(&ProtoMessageView::<ReqMsgView::Proxied>(
+            tx.send_and_close(&ProtoSendMessage::<ReqMsgView::Proxied>(
                 self.req.as_view(),
                 PhantomData,
             ))
             .await;
 
             let mut res = Res::default();
-            let mut msg = ProtoMessageMut::<Res>(res.as_mut(), PhantomData);
+            let mut msg = ProtoRecvMessage::<Res>(res.as_mut(), PhantomData);
             loop {
                 let i = rx.next(&mut msg).await.unwrap();
                 if let RecvStreamItem::Trailers(t) = i {
@@ -149,7 +149,7 @@ where
             // message to cause the receiver stream to be polled.
             let sender = stream! {
                 while let Some(req) = self.req_stream.next().await {
-                    if !tx.send_msg(&ProtoMessageView::<ReqStream::Item>(req.as_view(), PhantomData)).await {
+                    if !tx.send_msg(&ProtoSendMessage::<ReqStream::Item>(req.as_view(), PhantomData)).await {
                         return;
                     }
                     yield None;
@@ -162,7 +162,7 @@ where
             let receiver = stream! {
                 loop {
                     let mut res = Res::default();
-                    let i = rx.next(&mut ProtoMessageMut::<Res>(res.as_mut(), PhantomData)).await;
+                    let i = rx.next(&mut ProtoRecvMessage::<Res>(res.as_mut(), PhantomData)).await;
                     if let Some(RecvStreamItem::Message) = i {
                         yield Ok(res);
                     } else if let Some(RecvStreamItem::Trailers(t)) = i {
@@ -213,12 +213,12 @@ impl<T: CallArgs> SharedCall for T {
     }
 }
 
-pub struct ProtoMessageView<'a, M: Message + 'static>(
+pub struct ProtoSendMessage<'a, M: Message + 'static>(
     pub <M as Proxied>::View<'a>,
     pub PhantomData<&'a ()>,
 );
 
-impl<'a, M> SendMessage for ProtoMessageView<'a, M>
+impl<'a, M> SendMessage for ProtoSendMessage<'a, M>
 where
     M: Message + 'static,
     <M as Proxied>::View<'a>: Serialize + Send + Sync,
@@ -227,21 +227,34 @@ where
         vec![self.0.serialize().unwrap()]
     }
 
-    fn msg_ptr(&self) -> *const () {
-        &self.0 as *const _ as *const ()
+    fn _ptr_for(&self, id: TypeId) -> Option<*const ()> {
+        if id != TypeId::of::<M::Mut<'static>>() {
+            return None;
+        }
+        Some(&self.0 as *const _ as *const ())
     }
+}
 
-    fn msg_type_id(&self) -> TypeId {
+impl<'a, M: Message> MessageType for ProtoSendMessage<'a, M> {
+    type Target<'b> = <M as Proxied>::View<'b>;
+    fn type_id() -> TypeId {
         TypeId::of::<M::View<'static>>()
     }
 }
 
-pub struct ProtoMessageMut<'a, M: Message + 'static>(
+pub struct ProtoRecvMessage<'a, M: Message + 'static>(
     pub <M as MutProxied>::Mut<'a>,
     pub PhantomData<&'a ()>,
 );
 
-impl<'a, M> RecvMessage for ProtoMessageMut<'a, M>
+impl<'a, M: Message> MessageType for ProtoRecvMessage<'a, M> {
+    type Target<'b> = <M as MutProxied>::Mut<'b>;
+    fn type_id() -> TypeId {
+        TypeId::of::<M::Mut<'static>>()
+    }
+}
+
+impl<'a, M> RecvMessage for ProtoRecvMessage<'a, M>
 where
     M: MutProxied + Message + 'static,
     <M as MutProxied>::Mut<'a>: MutProxy<'a> + Send + Sync + ClearAndParse,
@@ -252,35 +265,10 @@ where
             .unwrap();
     }
 
-    fn msg_ptr(&self) -> *const () {
-        &self.0 as *const _ as *const ()
-    }
-
-    fn msg_type_id(&self) -> TypeId {
-        TypeId::of::<M::Mut<'static>>()
-    }
-}
-
-pub fn downcast_proto_view<'a, T>(msg: &'a dyn SendMessage) -> Option<&'a T::View<'a>>
-where
-    T: Message + 'static,
-{
-    if msg.msg_type_id() == TypeId::of::<T::View<'static>>() {
-        let inner_msg = unsafe { &*(msg.msg_ptr() as *const T::View<'a>) };
-        Some(inner_msg)
-    } else {
-        None
-    }
-}
-
-pub fn downcast_proto_mut<'a, T>(msg: &'a mut dyn RecvMessage) -> Option<&'a mut T::Mut<'a>>
-where
-    T: Message + 'static,
-{
-    if msg.msg_type_id() == TypeId::of::<T::Mut<'static>>() {
-        let inner_msg = unsafe { &mut *(msg.msg_ptr() as *mut T::Mut<'a>) };
-        Some(inner_msg)
-    } else {
-        None
+    fn _ptr_for(&mut self, id: TypeId) -> Option<*mut ()> {
+        if id != TypeId::of::<M::Mut<'static>>() {
+            return None;
+        }
+        Some(&mut self.0 as *mut _ as *mut ())
     }
 }
