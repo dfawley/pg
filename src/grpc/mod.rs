@@ -29,21 +29,6 @@ pub struct Trailers {
 #[derive(Clone, Default)]
 pub struct Channel;
 
-#[derive(Debug)]
-#[allow(unused)]
-pub enum MethodType {
-    Unary,
-    ClientStream,
-    ServerStream,
-    BidiStream,
-}
-
-#[derive(Debug)]
-pub struct MethodDescriptor {
-    pub method_name: String,
-    pub method_type: MethodType,
-}
-
 #[allow(unused)]
 pub trait SendMessage: Send + Sync {
     fn encode(&self) -> Vec<Vec<u8>>;
@@ -75,6 +60,7 @@ pub trait MessageType {
 }
 
 impl dyn SendMessage + '_ {
+    /// Downcasts the SendMessage to T::Target if the SendMessage contains a T.
     pub fn downcast_ref<T: MessageType>(&self) -> Option<&T::Target<'_>> {
         if let Some(ptr) = self._ptr_for(T::type_id()) {
             unsafe { Some(&*(ptr as *mut T::Target<'_>)) }
@@ -85,6 +71,7 @@ impl dyn SendMessage + '_ {
 }
 
 impl dyn RecvMessage + '_ {
+    /// Downcasts the RecvMessage to T::Target if the RecvMessage contains a T.
     pub fn downcast_mut<T: MessageType>(&mut self) -> Option<&mut T::Target<'_>> {
         if let Some(ptr) = self._ptr_for(T::type_id()) {
             unsafe { Some(&mut *(ptr as *mut T::Target<'_>)) }
@@ -95,11 +82,10 @@ impl dyn RecvMessage + '_ {
 }
 
 /// SendStream represents the sending side of a client stream.  Dropping the
-/// SendStream or calling send_and_close results in a signal the server can use
-/// to determine the client is done sending requests.
+/// SendStream or calling send_and_close closes the send side of the stream.
 pub trait SendStream: Send {
-    /// Sends msg on the stream.  If false is returned, the message could not be
-    /// delivered because the stream was closed.  Future calls to SendStream
+    /// Sends msg on the stream.  If Err(()) is returned, the message could not
+    /// be delivered because the stream was closed.  Future calls to SendStream
     /// will do nothing.
     fn send_msg<'a>(
         &'a mut self,
@@ -152,32 +138,42 @@ pub trait Call: Send + Sync {
     /// available to allow the call to start.
     fn call(
         &self,
-        descriptor: MethodDescriptor,
+        method: String,
         args: Args,
     ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send;
 }
 
 /// CallOnce is like Call, but consumes the receiver to limit it to a single
 /// call.  This is particularly relevant for pairing with CallInterceptorOnce
-/// usages.  It is blanket implemented on Callable references.
+/// usages.  It is blanket implemented on Call references.
 pub trait CallOnce: Send + Sync {
     /// Starts a call, returning the send and receive streams to interact with
     /// the RPC.  The returned future may block until sufficient resources are
     /// available to allow the call to start.
-    fn call(
+    fn call_once(
         self,
-        descriptor: MethodDescriptor,
+        method: String,
         args: Args,
     ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send;
 }
 
 impl<C: Call> CallOnce for &C {
-    fn call(
+    fn call_once(
         self,
-        descriptor: MethodDescriptor,
+        method: String,
         args: Args,
     ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send {
-        <C as Call>::call(self, descriptor, args)
+        <C as Call>::call(self, method, args)
+    }
+}
+
+impl<C: Call> Call for &C {
+    fn call(
+        &self,
+        method: String,
+        args: Args,
+    ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send {
+        <C as Call>::call(self, method, args)
     }
 }
 
@@ -185,31 +181,20 @@ impl<C: Call> CallOnce for &C {
 pub trait CallInterceptor: Send + Sync {
     /// Starts a call.  Implementations should generally use next to create and
     /// start a call whose streams are optionally wrapped before being returned.
-    fn call<C: CallOnce>(
+    fn call(
         &self,
-        descriptor: MethodDescriptor,
+        method: String,
         args: Args,
-        next: C,
+        next: &impl Call,
     ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send;
 }
 
 /// CallInterceptorOnce allows intercepting a call one time only.
 pub trait CallInterceptorOnce: Send + Sync {
-    fn call<C: CallOnce>(
+    fn call_once(
         self,
-        descriptor: MethodDescriptor,
+        method: String,
         args: Args,
-        next: C,
+        next: impl CallOnce,
     ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send;
-}
-
-impl<CI: CallInterceptor> CallInterceptorOnce for &CI {
-    fn call<C: CallOnce>(
-        self,
-        descriptor: MethodDescriptor,
-        args: Args,
-        next: C,
-    ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send {
-        <CI as CallInterceptor>::call(self, descriptor, args, next)
-    }
 }

@@ -7,15 +7,8 @@ use crate::grpc_protobuf::ProtoRecvMessage;
 use super::*;
 
 impl Call for Channel {
-    async fn call(
-        &self,
-        descriptor: MethodDescriptor,
-        _args: Args,
-    ) -> (impl SendStream, impl RecvStream) {
-        println!(
-            "starting call for {:?} ({:?})",
-            descriptor.method_name, descriptor.method_type
-        );
+    async fn call(&self, method: String, _args: Args) -> (impl SendStream, impl RecvStream) {
+        println!("starting call for {method}");
         (
             ChannelSendStream {},
             ChannelRecvStream {

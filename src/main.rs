@@ -37,7 +37,7 @@ async fn main() {
     headers_example(&client).await;
 }
 
-async fn unary<C: Call>(client: &MyServiceClientStub<C>) {
+async fn unary(client: &MyServiceClientStub<impl Call>) {
     {
         // Using an owned message for request and response:
         let res = client.unary_call(proto!(MyRequest { query: 1 })).await;
@@ -87,7 +87,7 @@ async fn unary<C: Call>(client: &MyServiceClientStub<C>) {
     println!();
 }
 
-async fn bidi<C: Call>(client: &MyServiceClientStub<C>) {
+async fn bidi(client: &MyServiceClientStub<impl Call>) {
     {
         let requests = Box::pin(stream! {
             yield proto!(MyRequest { query: 10 });
@@ -101,7 +101,7 @@ async fn bidi<C: Call>(client: &MyServiceClientStub<C>) {
     println!();
 }
 
-async fn headers_example<C: Call>(client: &MyServiceClientStub<C>) {
+async fn headers_example(client: &MyServiceClientStub<impl Call>) {
     {
         let (header_reader_interceptor, headers_rx) = HeaderReader::new();
         let res = client
@@ -135,13 +135,13 @@ mod header_reader {
     }
 
     impl CallInterceptorOnce for HeaderReader {
-        async fn call<C: CallOnce>(
+        async fn call_once(
             self,
-            descriptor: MethodDescriptor,
+            method: String,
             args: Args,
-            next: C,
+            next: impl CallOnce,
         ) -> (impl SendStream, impl RecvStream) {
-            let (tx, delegate) = next.call(descriptor, args).await;
+            let (tx, delegate) = next.call_once(method, args).await;
             (
                 tx,
                 HeaderReaderRecvStream {
@@ -176,13 +176,13 @@ mod interceptor {
     pub struct FailStatusInterceptor {}
 
     impl CallInterceptor for FailStatusInterceptor {
-        async fn call<C: CallOnce>(
+        async fn call(
             &self,
-            descriptor: MethodDescriptor,
+            method: String,
             args: Args,
-            next: C,
+            next: &impl Call,
         ) -> (impl SendStream, impl RecvStream) {
-            let (tx, rx) = next.call(descriptor, args).await;
+            let (tx, rx) = next.call(method, args).await;
             (tx, FailingRecvStreamInterceptor { delegate: rx })
         }
     }
@@ -205,13 +205,13 @@ mod interceptor {
     pub struct PrintReqInterceptor {}
 
     impl CallInterceptor for PrintReqInterceptor {
-        async fn call<C: CallOnce>(
+        async fn call(
             &self,
-            descriptor: MethodDescriptor,
+            method: String,
             args: Args,
-            next: C,
+            next: &impl Call,
         ) -> (impl SendStream, impl RecvStream) {
-            let (tx, rx) = next.call(descriptor, args).await;
+            let (tx, rx) = next.call(method, args).await;
             (PrintReqSendStreamInterceptor { delegate: tx }, rx)
         }
     }

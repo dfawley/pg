@@ -10,29 +10,29 @@ use std::time::Duration;
 use std::{any::TypeId, marker::PhantomData};
 
 use crate::grpc::{
-    Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, MessageType, MethodDescriptor,
-    RecvMessage, RecvStream, RecvStreamItem, SendMessage, SendStream, Status,
+    Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, MessageType, RecvMessage, RecvStream,
+    RecvStreamItem, SendMessage, SendStream, Status,
 };
 
-pub struct UnaryCall<'a, C, Res, ReqMsgView> {
+pub struct UnaryCallBuilder<'a, C, Res, ReqMsgView> {
     channel: C,
-    desc: MethodDescriptor,
+    method: String,
     req: ReqMsgView,
     args: Args,
     _phantom: PhantomData<&'a Res>,
 }
 
-impl<'a, C, Res, ReqMsgView> UnaryCall<'a, C, Res, ReqMsgView>
+impl<'a, C, Res, ReqMsgView> UnaryCallBuilder<'a, C, Res, ReqMsgView>
 where
     C: CallOnce,
     Res: Message + 'static,
     ReqMsgView: AsView + Send + Sync + 'a,
 {
-    pub fn new(channel: C, desc: MethodDescriptor, req: ReqMsgView) -> Self {
+    pub fn new(channel: C, method: String, req: ReqMsgView) -> Self {
         Self {
             channel,
             req,
-            desc,
+            method,
             args: Default::default(),
             _phantom: PhantomData,
         }
@@ -41,10 +41,10 @@ where
     pub fn with_interceptor<I: CallInterceptorOnce>(
         self,
         interceptor: I,
-    ) -> UnaryCall<'a, impl CallOnce, Res, ReqMsgView> {
-        UnaryCall {
+    ) -> UnaryCallBuilder<'a, impl CallOnce, Res, ReqMsgView> {
+        UnaryCallBuilder {
             channel: self.channel.with_interceptor(interceptor),
-            desc: self.desc,
+            method: self.method,
             req: self.req,
             args: self.args,
             _phantom: PhantomData,
@@ -58,7 +58,7 @@ where
         <ReqMsgView as AsView>::Proxied: Message + 'static,
         for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>: MessageView<'b>,
     {
-        let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
+        let (mut tx, mut rx) = self.channel.call_once(self.method, self.args).await;
         let v: &(dyn SendMessage + '_) =
             &ProtoSendMessage::<ReqMsgView::Proxied>(self.req.as_view(), PhantomData);
         tx.send_and_close(v).await;
@@ -72,7 +72,7 @@ where
     }
 }
 
-impl<'a, C, Res, ReqMsgView> IntoFuture for UnaryCall<'a, C, Res, ReqMsgView>
+impl<'a, C, Res, ReqMsgView> IntoFuture for UnaryCallBuilder<'a, C, Res, ReqMsgView>
 where
     C: CallOnce + 'a,
     Res: Message + 'static,
@@ -86,7 +86,7 @@ where
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
+            let (mut tx, mut rx) = self.channel.call_once(self.method, self.args).await;
             tx.send_and_close(&ProtoSendMessage::<ReqMsgView::Proxied>(
                 self.req.as_view(),
                 PhantomData,
@@ -109,27 +109,27 @@ where
     }
 }
 
-pub struct BidiCall<'a, C, ReqStream: Stream, Res> {
+pub struct BidiCallBuilder<'a, C, ReqStream: Stream, Res> {
     channel: C,
-    desc: MethodDescriptor,
+    method: String,
     req_stream: ReqStream,
     args: Args,
     _phantom: PhantomData<&'a Res>,
 }
 
-impl<'a, C, ReqStream: Stream, Res> BidiCall<'a, C, ReqStream, Res> {
-    pub fn new(channel: C, desc: MethodDescriptor, req: ReqStream) -> Self {
+impl<'a, C, ReqStream: Stream, Res> BidiCallBuilder<'a, C, ReqStream, Res> {
+    pub fn new(channel: C, method: String, req: ReqStream) -> Self {
         Self {
             channel,
             req_stream: req,
-            desc,
+            method,
             args: Default::default(),
             _phantom: Default::default(),
         }
     }
 }
 
-impl<'a, C, ReqStream, Res> IntoFuture for BidiCall<'a, C, ReqStream, Res>
+impl<'a, C, ReqStream, Res> IntoFuture for BidiCallBuilder<'a, C, ReqStream, Res>
 where
     C: CallOnce + 'a,
     ReqStream: Unpin + Stream + Send + 'a,
@@ -143,7 +143,7 @@ where
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
-            let (mut tx, mut rx) = self.channel.call(self.desc, self.args).await;
+            let (mut tx, mut rx) = self.channel.call_once(self.method, self.args).await;
 
             // Create a stream for sending data.  Yields None after every
             // message to cause the receiver stream to be polled.
@@ -188,15 +188,15 @@ pub trait CallArgs: private::Sealed {
     fn args_mut(&mut self) -> &mut Args;
 }
 
-impl<'a, C, Res, ReqMsg> private::Sealed for UnaryCall<'a, C, Res, ReqMsg> {}
-impl<'a, C, Res, ReqMsg> CallArgs for UnaryCall<'a, C, Res, ReqMsg> {
+impl<'a, C, Res, ReqMsg> private::Sealed for UnaryCallBuilder<'a, C, Res, ReqMsg> {}
+impl<'a, C, Res, ReqMsg> CallArgs for UnaryCallBuilder<'a, C, Res, ReqMsg> {
     fn args_mut(&mut self) -> &mut Args {
         &mut self.args
     }
 }
 
-impl<'a, C, ReqStream: Stream, Res> private::Sealed for BidiCall<'a, C, ReqStream, Res> {}
-impl<'a, C, ReqStream: Stream, Res> CallArgs for BidiCall<'a, C, ReqStream, Res> {
+impl<'a, C, ReqStream: Stream, Res> private::Sealed for BidiCallBuilder<'a, C, ReqStream, Res> {}
+impl<'a, C, ReqStream: Stream, Res> CallArgs for BidiCallBuilder<'a, C, ReqStream, Res> {
     fn args_mut(&mut self) -> &mut Args {
         &mut self.args
     }
@@ -214,8 +214,8 @@ impl<T: CallArgs> SharedCall for T {
 }
 
 pub struct ProtoSendMessage<'a, M: Message + 'static>(
-    pub <M as Proxied>::View<'a>,
-    pub PhantomData<&'a ()>,
+    <M as Proxied>::View<'a>,
+    PhantomData<&'a ()>,
 );
 
 impl<'a, M> SendMessage for ProtoSendMessage<'a, M>
@@ -243,8 +243,8 @@ impl<'a, M: Message> MessageType for ProtoSendMessage<'a, M> {
 }
 
 pub struct ProtoRecvMessage<'a, M: Message + 'static>(
-    pub <M as MutProxied>::Mut<'a>,
-    pub PhantomData<&'a ()>,
+    <M as MutProxied>::Mut<'a>,
+    PhantomData<&'a ()>,
 );
 
 impl<'a, M: Message> MessageType for ProtoRecvMessage<'a, M> {
