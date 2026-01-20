@@ -22,6 +22,7 @@ impl Status {
 
 #[derive(Clone, Debug)]
 pub struct Headers {}
+#[derive(Clone, Debug)]
 pub struct Trailers {
     pub status: Status,
 }
@@ -95,10 +96,19 @@ pub trait SendStream: Send {
     async fn send_and_close(self, msg: &dyn SendMessage);
 }
 
+/// RecvStreamItem represents an item received on a RecvStream.  See RecvStream
+/// for details on when and how these items are used.
+#[derive(Debug)]
 pub enum RecvStreamItem {
+    /// Indicates headers were received on the stream and includes the headers.
     Headers(Headers),
+    /// Indicates a message was received on the stream; the message provided to
+    /// RecvStream::next will be populated.
     Message,
+    /// Indicates trailers were received on the stream and includes the trailers.
     Trailers(Trailers),
+    /// Indicates the RecvStream was closed.  Trailers must have been provided
+    /// before this value may be used.
     StreamClosed,
 }
 
