@@ -83,23 +83,16 @@ impl dyn RecvMessage + '_ {
 
 /// SendStream represents the sending side of a client stream.  Dropping the
 /// SendStream or calling send_and_close closes the send side of the stream.
+#[trait_variant::make(Send)]
 pub trait SendStream: Send {
     /// Sends msg on the stream.  If Err(()) is returned, the message could not
     /// be delivered because the stream was closed.  Future calls to SendStream
     /// will do nothing.
-    fn send_msg<'a>(
-        &'a mut self,
-        msg: &'a dyn SendMessage,
-    ) -> impl Future<Output = Result<(), ()>> + Send + 'a;
+    async fn send_msg(&mut self, msg: &dyn SendMessage) -> Result<(), ()>;
 
     /// Sends msg on the stream and indicates the client has no further messages
     /// to send.
-    // TODO - This should consume self, but that fails without the new trait
-    // solver.
-    fn send_and_close<'a>(
-        &'a mut self,
-        msg: &'a dyn SendMessage,
-    ) -> impl Future<Output = ()> + Send + 'a;
+    async fn send_and_close(self, msg: &dyn SendMessage);
 }
 
 pub enum RecvStreamItem {
@@ -121,80 +114,66 @@ pub enum RecvStreamItem {
 /// (including zero), followed by a required Trailers value.  A RecvStream
 /// should not be used after next has returned Trailers, but it should return
 /// StreamClosed if it is.
+#[trait_variant::make(Send)]
 pub trait RecvStream: Send {
     /// Returns the next item on the response stream, or None if the stream has
     /// finished.  If the item is Message, then RecvMessage has received the
     /// contents of a message.
-    fn next<'a>(
-        &'a mut self,
-        msg: &'a mut dyn RecvMessage,
-    ) -> impl Future<Output = RecvStreamItem> + Send + 'a;
+    async fn next(&mut self, msg: &mut dyn RecvMessage) -> RecvStreamItem;
 }
 
 /// Call begins the dispatching of an RPC.
+#[trait_variant::make(Send)]
 pub trait Call: Send + Sync {
     /// Starts a call, returning the send and receive streams to interact with
     /// the RPC.  The returned future may block until sufficient resources are
     /// available to allow the call to start.
-    fn call(
-        &self,
-        method: String,
-        args: Args,
-    ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send;
+    async fn call(&self, method: String, args: Args) -> (impl SendStream, impl RecvStream);
 }
 
 /// CallOnce is like Call, but consumes the receiver to limit it to a single
 /// call.  This is particularly relevant for pairing with CallInterceptorOnce
 /// usages.  It is blanket implemented on Call references.
+#[trait_variant::make(Send)]
 pub trait CallOnce: Send + Sync {
     /// Starts a call, returning the send and receive streams to interact with
     /// the RPC.  The returned future may block until sufficient resources are
     /// available to allow the call to start.
-    fn call_once(
-        self,
-        method: String,
-        args: Args,
-    ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send;
+    async fn call_once(self, method: String, args: Args) -> (impl SendStream, impl RecvStream);
 }
 
 impl<C: Call> CallOnce for &C {
-    fn call_once(
-        self,
-        method: String,
-        args: Args,
-    ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send {
-        <C as Call>::call(self, method, args)
+    async fn call_once(self, method: String, args: Args) -> (impl SendStream, impl RecvStream) {
+        <C as Call>::call(self, method, args).await
     }
 }
 
 impl<C: Call> Call for &C {
-    fn call(
-        &self,
-        method: String,
-        args: Args,
-    ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send {
-        <C as Call>::call(self, method, args)
+    async fn call(&self, method: String, args: Args) -> (impl SendStream, impl RecvStream) {
+        <C as Call>::call(self, method, args).await
     }
 }
 
 /// CallInterceptor allows intercepting a call.
+#[trait_variant::make(Send)]
 pub trait CallInterceptor: Send + Sync {
     /// Starts a call.  Implementations should generally use next to create and
     /// start a call whose streams are optionally wrapped before being returned.
-    fn call(
+    async fn call(
         &self,
         method: String,
         args: Args,
         next: &impl Call,
-    ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send;
+    ) -> (impl SendStream, impl RecvStream);
 }
 
 /// CallInterceptorOnce allows intercepting a call one time only.
+#[trait_variant::make(Send)]
 pub trait CallInterceptorOnce: Send + Sync {
-    fn call_once(
+    async fn call_once(
         self,
         method: String,
         args: Args,
         next: impl CallOnce,
-    ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send;
+    ) -> (impl SendStream, impl RecvStream);
 }

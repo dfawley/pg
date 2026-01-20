@@ -58,7 +58,7 @@ where
         <ReqMsgView as AsView>::Proxied: Message + 'static,
         for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>: MessageView<'b>,
     {
-        let (mut tx, mut rx) = self.channel.call_once(self.method, self.args).await;
+        let (tx, mut rx) = self.channel.call_once(self.method, self.args).await;
         let v: &(dyn SendMessage + '_) =
             &ProtoSendMessage::<ReqMsgView::Proxied>(self.req.as_view(), PhantomData);
         tx.send_and_close(v).await;
@@ -86,7 +86,7 @@ where
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let (mut tx, mut rx) = self.channel.call_once(self.method, self.args).await;
+            let (tx, mut rx) = self.channel.call_once(self.method, self.args).await;
             tx.send_and_close(&ProtoSendMessage::<ReqMsgView::Proxied>(
                 self.req.as_view(),
                 PhantomData,
