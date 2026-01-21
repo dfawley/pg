@@ -25,8 +25,6 @@ pub struct UnaryCallBuilder<'a, C, Res, ReqMsgView> {
 impl<'a, C, Res, ReqMsgView> UnaryCallBuilder<'a, C, Res, ReqMsgView>
 where
     C: CallOnce,
-    Res: Message + 'static,
-    ReqMsgView: AsView + Send + Sync + 'a,
 {
     pub fn new(channel: C, method: String, req: ReqMsgView) -> Self {
         Self {
@@ -53,8 +51,10 @@ where
 
     pub async fn with_response_message<ResMsgMut>(self, res: &mut ResMsgMut) -> Status
     where
+        Res: Message + 'static,
         ResMsgMut: AsMut<MutProxied = Res>,
         for<'b> Res::Mut<'b>: ClearAndParse + Send,
+        ReqMsgView: AsView + Send + Sync + 'a,
         <ReqMsgView as AsView>::Proxied: Message + 'static,
         for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>: MessageView<'b>,
     {
@@ -86,24 +86,12 @@ where
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let (tx, mut rx) = self.channel.call_once(self.method, self.args).await;
-            tx.send_and_close(&ProtoSendMessage::<ReqMsgView::Proxied>(
-                self.req.as_view(),
-                PhantomData,
-            ))
-            .await;
-
             let mut res = Res::default();
-            let mut msg = ProtoRecvMessage::<Res>(res.as_mut(), PhantomData);
-            loop {
-                let i = rx.next(&mut msg).await;
-                if let RecvStreamItem::Trailers(t) = i {
-                    if t.status.code == 0 {
-                        drop(msg);
-                        return Ok(res);
-                    }
-                    return Err(t.status);
-                }
+            let status = self.with_response_message(&mut res).await;
+            if status.code == 0 {
+                Ok(res)
+            } else {
+                Err(status)
             }
         })
     }
@@ -228,7 +216,7 @@ where
     }
 
     fn _ptr_for(&self, id: TypeId) -> Option<*const ()> {
-        if id != TypeId::of::<M::Mut<'static>>() {
+        if id != TypeId::of::<M::View<'static>>() {
             return None;
         }
         Some(&self.0 as *const _ as *const ())

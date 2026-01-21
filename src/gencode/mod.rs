@@ -1,4 +1,4 @@
-use crate::grpc::{Call, CallOnce};
+use crate::grpc::Call;
 use crate::grpc_protobuf::{BidiCallBuilder, UnaryCallBuilder};
 
 pub mod pb {
@@ -20,22 +20,22 @@ impl<C> MyServiceClientStub<C> {
 }
 
 impl<C: Call> MyServiceClientStub<C> {
-    pub fn unary_call<'stub: 'call, 'call, ReqMsgView>(
-        &'stub self,
+    pub fn unary_call<ReqMsgView>(
+        &self,
         req: ReqMsgView,
-    ) -> UnaryCallBuilder<'call, impl CallOnce, MyResponse, ReqMsgView>
+    ) -> UnaryCallBuilder<'_, &C, MyResponse, ReqMsgView>
     where
-        ReqMsgView: AsView<Proxied = MyRequest> + Send + Sync + 'call,
+        ReqMsgView: AsView<Proxied = MyRequest> + Send + Sync,
     {
         UnaryCallBuilder::new(&self.channel, "unary_call".to_string(), req)
     }
 
-    pub fn streaming_call<'stub: 'call, 'call, ReqStream>(
-        &'stub self,
+    pub fn streaming_call<ReqStream>(
+        &self,
         req_stream: ReqStream,
-    ) -> BidiCallBuilder<'call, impl CallOnce, ReqStream, MyResponse>
+    ) -> BidiCallBuilder<'_, &C, ReqStream, MyResponse>
     where
-        ReqStream: Unpin + Stream<Item = MyRequest> + Send + 'static,
+        ReqStream: Unpin + Stream<Item = MyRequest> + Send,
     {
         BidiCallBuilder::new(&self.channel, "streaming_call".to_string(), req_stream)
     }
