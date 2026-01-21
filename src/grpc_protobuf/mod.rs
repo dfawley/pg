@@ -2,8 +2,7 @@ use async_stream::stream;
 use futures_core::Stream;
 use futures_util::{StreamExt, stream::select};
 use protobuf::{
-    AsMut, AsView, ClearAndParse, Message, MessageMut, MessageView, MutProxied, MutProxy, Proxied,
-    Serialize,
+    AsMut, AsView, ClearAndParse, Message, MessageView, MutProxied, Proxied, Serialize,
 };
 use std::pin::Pin;
 use std::time::Duration;
@@ -49,21 +48,24 @@ where
         }
     }
 
-    pub async fn with_response_message<ResMsgMut>(self, res: &mut ResMsgMut) -> Status
+    pub async fn with_response_message(self, res: &mut impl AsMut<MutProxied = Res>) -> Status
     where
-        Res: Message + 'static,
-        ResMsgMut: AsMut<MutProxied = Res>,
-        for<'b> Res::Mut<'b>: ClearAndParse + Send,
+        // ReqMsgView is a proto message view. (Ideally we could just require
+        // "AsView" and protobuf would automatically include the rest.)
         ReqMsgView: AsView + Send + Sync + 'a,
         <ReqMsgView as AsView>::Proxied: Message + 'static,
         for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>: MessageView<'b>,
+        // Res is a proto message. (Ideally we could just require "Message" and
+        // protobuf would automatically include the rest.)
+        Res: Message + 'static,
+        for<'b> Res::Mut<'b>: ClearAndParse + Send,
     {
         let (tx, mut rx) = self.channel.call_once(self.method, self.args).await;
         let req = &ProtoSendMessage::from_view(&self.req);
         tx.send_and_close(req).await;
-        let mut msg = ProtoRecvMessage::from_mut(res);
+        let mut res = ProtoRecvMessage::from_mut(res);
         loop {
-            let i = rx.next(&mut msg).await;
+            let i = rx.next(&mut res).await;
             if let RecvStreamItem::Trailers(t) = i {
                 return t.status;
             }
@@ -73,12 +75,17 @@ where
 
 impl<'a, C, Res, ReqMsgView> IntoFuture for UnaryCallBuilder<'a, C, Res, ReqMsgView>
 where
+    // We can make one call on C.
     C: CallOnce + 'a,
-    Res: Message + 'static,
-    for<'b> Res::Mut<'b>: ClearAndParse + Send,
+    // ReqMsgView is a proto message view. (Ideally we could just require
+    // "AsView" and protobuf would automatically include the rest.)
     ReqMsgView: AsView + Send + Sync + 'a,
     <ReqMsgView as AsView>::Proxied: Message + 'static,
     for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>: MessageView<'b>,
+    // Res is a proto message. (Ideally we could just require "Message" and
+    // protobuf would automatically include the rest.)
+    Res: Message + 'static,
+    for<'b> Res::Mut<'b>: ClearAndParse + Send,
 {
     type Output = Result<Res, Status>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
@@ -116,16 +123,23 @@ impl<'a, C, ReqStream: Stream, Res> BidiCallBuilder<'a, C, ReqStream, Res> {
     }
 }
 
+pub type ResponseStream<'a, Res> = Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send + 'a>>;
+
 impl<'a, C, ReqStream, Res> IntoFuture for BidiCallBuilder<'a, C, ReqStream, Res>
 where
+    // We can make one call on C.
     C: CallOnce + 'a,
+    // ReqStream is a stream of proto messages. (Ideally we could just require
+    // "Item: Message" and protobuf would automatically include the rest.)
     ReqStream: Unpin + Stream + Send + 'a,
     ReqStream::Item: Message + 'static,
     for<'b> <ReqStream::Item as Proxied>::View<'b>: MessageView<'b>,
-    Res: Message + 'static,
-    for<'b> Res::Mut<'b>: Send + MessageMut<'b>,
+    // Res is a proto message. (Ideally we could just require "Message" and
+    // protobuf would automatically include the rest.)
+    Res: Message + ClearAndParse + 'static,
+    for<'b> Res::Mut<'b>: ClearAndParse + Send,
 {
-    type Output = Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send + 'a>>;
+    type Output = ResponseStream<'a, Res>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(mut self) -> Self::IntoFuture {
@@ -163,7 +177,7 @@ where
             // Filter out sender stream None values and propagate the receiver
             // stream only.
             Box::pin(select(sender, receiver).filter_map(|item| async move { item }))
-                as Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send + 'a>>
+                as ResponseStream<'_, Res>
         })
     }
 }
@@ -200,50 +214,50 @@ impl<T: CallArgs> SharedCall for T {
     }
 }
 
-pub struct ProtoSendMessage<'a, M: Message + 'static>(<M as Proxied>::View<'a>);
+pub struct ProtoSendMessage<'a, V: Proxied + 'static>(V::View<'a>);
 
-impl<'a, M: Message> ProtoSendMessage<'a, M> {
-    pub fn from_view<V: AsView<Proxied = M>>(provider: &'a V) -> Self {
+impl<'a, V: Proxied> ProtoSendMessage<'a, V> {
+    pub fn from_view(provider: &'a impl AsView<Proxied = V>) -> Self {
         Self(provider.as_view())
     }
 }
 
-impl<'a, M> SendMessage for ProtoSendMessage<'a, M>
+impl<'a, V> SendMessage for ProtoSendMessage<'a, V>
 where
-    M: Message + 'static,
-    <M as Proxied>::View<'a>: Serialize + Send + Sync,
+    V: Proxied + 'static,
+    V::View<'a>: Serialize + Send + Sync,
 {
     fn encode(&self) -> Vec<Vec<u8>> {
         vec![self.0.serialize().unwrap()]
     }
 
     fn _ptr_for(&self, id: TypeId) -> Option<*const ()> {
-        if id != TypeId::of::<M::View<'static>>() {
+        if id != TypeId::of::<V::View<'static>>() {
             return None;
         }
         Some(&self.0 as *const _ as *const ())
     }
 }
 
-impl<'a, M: Message> MessageType for ProtoSendMessage<'a, M> {
-    type Target<'b> = <M as Proxied>::View<'b>;
+impl<'a, V: Proxied> MessageType for ProtoSendMessage<'a, V> {
+    type Target<'b> = V::View<'b>;
     fn type_id() -> TypeId {
-        TypeId::of::<M::View<'static>>()
+        TypeId::of::<V::View<'static>>()
     }
 }
 
-pub struct ProtoRecvMessage<'a, M: Message + 'static>(<M as MutProxied>::Mut<'a>);
+pub struct ProtoRecvMessage<'a, M: MutProxied + 'static>(M::Mut<'a>);
 
-impl<'a, M: Message> ProtoRecvMessage<'a, M> {
-    pub fn from_mut<V: AsMut<MutProxied = M>>(provider: &'a mut V) -> Self {
+impl<'a, M: MutProxied> ProtoRecvMessage<'a, M> {
+    pub fn from_mut(provider: &'a mut impl AsMut<MutProxied = M>) -> Self {
         Self(provider.as_mut())
     }
 }
 
 impl<'a, M> RecvMessage for ProtoRecvMessage<'a, M>
 where
-    M: MutProxied + Message + 'static,
-    <M as MutProxied>::Mut<'a>: MutProxy<'a> + Send + Sync + ClearAndParse,
+    M: MutProxied + 'static,
+    M::Mut<'a>: Send + Sync + ClearAndParse,
 {
     fn decode(&mut self, data: Vec<Vec<u8>>) {
         self.0
@@ -260,7 +274,7 @@ where
 }
 
 impl<'a, M: Message> MessageType for ProtoRecvMessage<'a, M> {
-    type Target<'b> = <M as MutProxied>::Mut<'b>;
+    type Target<'b> = M::Mut<'b>;
     fn type_id() -> TypeId {
         TypeId::of::<M::Mut<'static>>()
     }
