@@ -59,10 +59,9 @@ where
         for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>: MessageView<'b>,
     {
         let (tx, mut rx) = self.channel.call_once(self.method, self.args).await;
-        let v: &(dyn SendMessage + '_) =
-            &ProtoSendMessage::<ReqMsgView::Proxied>(self.req.as_view(), PhantomData);
-        tx.send_and_close(v).await;
-        let mut msg = ProtoRecvMessage::<Res>(res.as_mut(), PhantomData);
+        let req = &ProtoSendMessage::from_view(&self.req);
+        tx.send_and_close(req).await;
+        let mut msg = ProtoRecvMessage::from_mut(res);
         loop {
             let i = rx.next(&mut msg).await;
             if let RecvStreamItem::Trailers(t) = i {
@@ -137,7 +136,7 @@ where
             // message to cause the receiver stream to be polled.
             let sender = stream! {
                 while let Some(req) = self.req_stream.next().await {
-                    if tx.send_msg(&ProtoSendMessage::<ReqStream::Item>(req.as_view(), PhantomData)).await.is_err() {
+                    if tx.send_msg(&ProtoSendMessage::from_view(&req)).await.is_err() {
                         return;
                     }
                     yield None;
@@ -150,7 +149,7 @@ where
             let receiver = stream! {
                 loop {
                     let mut res = Res::default();
-                    let i = rx.next(&mut ProtoRecvMessage::<Res>(res.as_mut(), PhantomData)).await;
+                    let i = rx.next(&mut ProtoRecvMessage::from_mut(&mut res)).await;
                     if let RecvStreamItem::Message = i {
                         yield Ok(res);
                     } else if let RecvStreamItem::Trailers(t) = i {
@@ -201,10 +200,13 @@ impl<T: CallArgs> SharedCall for T {
     }
 }
 
-pub struct ProtoSendMessage<'a, M: Message + 'static>(
-    <M as Proxied>::View<'a>,
-    PhantomData<&'a ()>,
-);
+pub struct ProtoSendMessage<'a, M: Message + 'static>(<M as Proxied>::View<'a>);
+
+impl<'a, M: Message> ProtoSendMessage<'a, M> {
+    pub fn from_view<V: AsView<Proxied = M>>(provider: &'a V) -> Self {
+        Self(provider.as_view())
+    }
+}
 
 impl<'a, M> SendMessage for ProtoSendMessage<'a, M>
 where
@@ -230,15 +232,11 @@ impl<'a, M: Message> MessageType for ProtoSendMessage<'a, M> {
     }
 }
 
-pub struct ProtoRecvMessage<'a, M: Message + 'static>(
-    <M as MutProxied>::Mut<'a>,
-    PhantomData<&'a ()>,
-);
+pub struct ProtoRecvMessage<'a, M: Message + 'static>(<M as MutProxied>::Mut<'a>);
 
-impl<'a, M: Message> MessageType for ProtoRecvMessage<'a, M> {
-    type Target<'b> = <M as MutProxied>::Mut<'b>;
-    fn type_id() -> TypeId {
-        TypeId::of::<M::Mut<'static>>()
+impl<'a, M: Message> ProtoRecvMessage<'a, M> {
+    pub fn from_mut<V: AsMut<MutProxied = M>>(provider: &'a mut V) -> Self {
+        Self(provider.as_mut())
     }
 }
 
@@ -258,5 +256,12 @@ where
             return None;
         }
         Some(&mut self.0 as *mut _ as *mut ())
+    }
+}
+
+impl<'a, M: Message> MessageType for ProtoRecvMessage<'a, M> {
+    type Target<'b> = <M as MutProxied>::Mut<'b>;
+    fn type_id() -> TypeId {
+        TypeId::of::<M::Mut<'static>>()
     }
 }
