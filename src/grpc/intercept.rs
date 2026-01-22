@@ -24,7 +24,7 @@ where
         &self,
         method: String,
         args: Args,
-    ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send {
+    ) -> impl Future<Output = (impl ClientSendStream, impl ClientRecvStream)> + Send {
         self.interceptor.call(method, args, &self.call)
     }
 }
@@ -45,7 +45,7 @@ impl<C: CallOnce, I: CallInterceptorOnce> CallOnce for InterceptorOnce<C, I> {
         self,
         method: String,
         args: Args,
-    ) -> impl Future<Output = (impl SendStream, impl RecvStream)> + Send {
+    ) -> impl Future<Output = (impl ClientSendStream, impl ClientRecvStream)> + Send {
         self.interceptor.call_once(method, args, self.call)
     }
 }

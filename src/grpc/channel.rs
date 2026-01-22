@@ -7,12 +7,12 @@ use crate::grpc_protobuf::ProtoRecvMessage;
 use super::*;
 
 impl Call for Channel {
-    async fn call(&self, method: String, _args: Args) -> (impl SendStream, impl RecvStream) {
+    async fn call(&self, method: String, _args: Args) -> (impl ClientSendStream, impl ClientRecvStream) {
         println!("starting call for {method}");
         (
             ChannelSendStream {},
             ChannelRecvStream {
-                state: Some(RecvStreamItem::Headers(Headers {})),
+                state: Some(ClientRecvStreamItem::Headers(Headers {})),
                 cnt: Default::default(),
             },
         )
@@ -26,7 +26,7 @@ pub struct Args {
 
 pub struct ChannelSendStream {}
 
-impl SendStream for ChannelSendStream {
+impl ClientSendStream for ChannelSendStream {
     async fn send_msg(&mut self, _msg: &dyn SendMessage) -> Result<(), ()> {
         Ok(()) // Err(()) on error sending
     }
@@ -36,27 +36,27 @@ impl SendStream for ChannelSendStream {
 }
 
 pub struct ChannelRecvStream {
-    state: Option<RecvStreamItem>,
+    state: Option<ClientRecvStreamItem>,
     cnt: Mutex<i32>,
 }
 
-impl RecvStream for ChannelRecvStream {
-    async fn next(&mut self, msg: &mut dyn RecvMessage) -> RecvStreamItem {
+impl ClientRecvStream for ChannelRecvStream {
+    async fn next(&mut self, msg: &mut dyn RecvMessage) -> ClientRecvStreamItem {
         let ret = self.state.take();
         match ret {
-            Some(RecvStreamItem::Headers(_)) => {
-                self.state = Some(RecvStreamItem::Message);
+            Some(ClientRecvStreamItem::Headers(_)) => {
+                self.state = Some(ClientRecvStreamItem::Message);
             }
-            Some(RecvStreamItem::Message) => {
+            Some(ClientRecvStreamItem::Message) => {
                 let mut cnt = self.cnt.lock().unwrap();
                 if let Some(inner_msg) = msg.downcast_mut::<ProtoRecvMessage<MyResponse>>() {
                     if *cnt == 2 {
                         // Last message; next time return trailers.
-                        self.state = Some(RecvStreamItem::Trailers(Trailers {
+                        self.state = Some(ClientRecvStreamItem::Trailers(Trailers {
                             status: Status::ok(),
                         }));
                     } else {
-                        self.state = Some(RecvStreamItem::Message);
+                        self.state = Some(ClientRecvStreamItem::Message);
                     }
                     *cnt += 1;
                     inner_msg.set_result(*cnt);
@@ -69,7 +69,7 @@ impl RecvStream for ChannelRecvStream {
         if let Some(ret) = ret {
             ret
         } else {
-            RecvStreamItem::StreamClosed
+            ClientRecvStreamItem::StreamClosed
         }
     }
 }

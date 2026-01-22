@@ -140,7 +140,7 @@ mod header_reader {
             method: String,
             args: Args,
             next: impl CallOnce,
-        ) -> (impl SendStream, impl RecvStream) {
+        ) -> (impl ClientSendStream, impl ClientRecvStream) {
             let (tx, delegate) = next.call_once(method, args).await;
             (
                 tx,
@@ -157,10 +157,10 @@ mod header_reader {
         delegate: Delegate,
     }
 
-    impl<Delegate: RecvStream> RecvStream for HeaderReaderRecvStream<Delegate> {
-        async fn next(&mut self, msg: &mut dyn RecvMessage) -> RecvStreamItem {
+    impl<Delegate: ClientRecvStream> ClientRecvStream for HeaderReaderRecvStream<Delegate> {
+        async fn next(&mut self, msg: &mut dyn RecvMessage) -> ClientRecvStreamItem {
             let i = self.delegate.next(msg).await;
-            if let RecvStreamItem::Headers(h) = &i
+            if let ClientRecvStreamItem::Headers(h) = &i
                 && let Some(tx) = self.tx.take()
             {
                 let _ = tx.send(h.clone());
@@ -181,7 +181,7 @@ mod interceptor {
             method: String,
             args: Args,
             next: &impl Call,
-        ) -> (impl SendStream, impl RecvStream) {
+        ) -> (impl ClientSendStream, impl ClientRecvStream) {
             let (tx, rx) = next.call(method, args).await;
             (tx, FailingRecvStreamInterceptor { delegate: rx })
         }
@@ -191,12 +191,12 @@ mod interceptor {
         delegate: Delegate,
     }
 
-    impl<Delegate: RecvStream> RecvStream for FailingRecvStreamInterceptor<Delegate> {
-        async fn next(&mut self, msg: &mut dyn RecvMessage) -> RecvStreamItem {
+    impl<Delegate: ClientRecvStream> ClientRecvStream for FailingRecvStreamInterceptor<Delegate> {
+        async fn next(&mut self, msg: &mut dyn RecvMessage) -> ClientRecvStreamItem {
             let i = self.delegate.next(msg).await;
-            if let RecvStreamItem::Trailers(mut t) = i {
+            if let ClientRecvStreamItem::Trailers(mut t) = i {
                 t.status.code = 3;
-                return RecvStreamItem::Trailers(t);
+                return ClientRecvStreamItem::Trailers(t);
             }
             i
         }
@@ -210,7 +210,7 @@ mod interceptor {
             method: String,
             args: Args,
             next: &impl Call,
-        ) -> (impl SendStream, impl RecvStream) {
+        ) -> (impl ClientSendStream, impl ClientRecvStream) {
             let (tx, rx) = next.call(method, args).await;
             (PrintReqSendStreamInterceptor { delegate: tx }, rx)
         }
@@ -220,7 +220,7 @@ mod interceptor {
         delegate: Delegate,
     }
 
-    impl<Delegate: SendStream> PrintReqSendStreamInterceptor<Delegate> {
+    impl<Delegate: ClientSendStream> PrintReqSendStreamInterceptor<Delegate> {
         fn send_common(&self, msg: &dyn SendMessage) {
             if let Some(req) = msg.downcast_ref::<ProtoSendMessage<MyRequest>>() {
                 println!("Saw request query value: {}", req.query());
@@ -228,7 +228,7 @@ mod interceptor {
         }
     }
 
-    impl<Delegate: SendStream> SendStream for PrintReqSendStreamInterceptor<Delegate> {
+    impl<Delegate: ClientSendStream> ClientSendStream for PrintReqSendStreamInterceptor<Delegate> {
         async fn send_msg(&mut self, msg: &dyn SendMessage) -> Result<(), ()> {
             self.send_common(msg);
             self.delegate.send_msg(msg).await

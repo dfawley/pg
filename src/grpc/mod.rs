@@ -20,11 +20,16 @@ impl Status {
     }
 }
 
+pub struct ServerStatus(pub Status);
+
+pub struct Metadata;
+
 #[derive(Clone, Debug)]
 pub struct Headers {}
 #[derive(Clone, Debug)]
 pub struct Trailers {
     pub status: Status,
+    // TODO: include Metadata.
 }
 
 #[derive(Clone, Default)]
@@ -85,7 +90,7 @@ impl dyn RecvMessage + '_ {
 /// SendStream represents the sending side of a client stream.  Dropping the
 /// SendStream or calling send_and_close closes the send side of the stream.
 #[trait_variant::make(Send)]
-pub trait SendStream: Send {
+pub trait ClientSendStream: Send {
     /// Sends msg on the stream.  If Err(()) is returned, the message could not
     /// be delivered because the stream was closed.  Future calls to SendStream
     /// will do nothing.
@@ -99,7 +104,7 @@ pub trait SendStream: Send {
 /// RecvStreamItem represents an item received on a RecvStream.  See RecvStream
 /// for details on when and how these items are used.
 #[derive(Debug)]
-pub enum RecvStreamItem {
+pub enum ClientRecvStreamItem {
     /// Indicates headers were received on the stream and includes the headers.
     Headers(Headers),
     /// Indicates a message was received on the stream; the message provided to
@@ -125,11 +130,11 @@ pub enum RecvStreamItem {
 /// should not be used after next has returned Trailers, but it should return
 /// StreamClosed if it is.
 #[trait_variant::make(Send)]
-pub trait RecvStream: Send {
+pub trait ClientRecvStream: Send {
     /// Returns the next item on the response stream, or None if the stream has
     /// finished.  If the item is Message, then RecvMessage has received the
     /// contents of a message.
-    async fn next(&mut self, msg: &mut dyn RecvMessage) -> RecvStreamItem;
+    async fn next(&mut self, msg: &mut dyn RecvMessage) -> ClientRecvStreamItem;
 }
 
 /// Call begins the dispatching of an RPC.
@@ -138,7 +143,11 @@ pub trait Call: Send + Sync {
     /// Starts a call, returning the send and receive streams to interact with
     /// the RPC.  The returned future may block until sufficient resources are
     /// available to allow the call to start.
-    async fn call(&self, method: String, args: Args) -> (impl SendStream, impl RecvStream);
+    async fn call(
+        &self,
+        method: String,
+        args: Args,
+    ) -> (impl ClientSendStream, impl ClientRecvStream);
 }
 
 /// CallOnce is like Call, but consumes the receiver to limit it to a single
@@ -149,17 +158,29 @@ pub trait CallOnce: Send + Sync {
     /// Starts a call, returning the send and receive streams to interact with
     /// the RPC.  The returned future may block until sufficient resources are
     /// available to allow the call to start.
-    async fn call_once(self, method: String, args: Args) -> (impl SendStream, impl RecvStream);
+    async fn call_once(
+        self,
+        method: String,
+        args: Args,
+    ) -> (impl ClientSendStream, impl ClientRecvStream);
 }
 
 impl<C: Call> CallOnce for &C {
-    async fn call_once(self, method: String, args: Args) -> (impl SendStream, impl RecvStream) {
+    async fn call_once(
+        self,
+        method: String,
+        args: Args,
+    ) -> (impl ClientSendStream, impl ClientRecvStream) {
         <C as Call>::call(self, method, args).await
     }
 }
 
 impl<C: Call> Call for &C {
-    async fn call(&self, method: String, args: Args) -> (impl SendStream, impl RecvStream) {
+    async fn call(
+        &self,
+        method: String,
+        args: Args,
+    ) -> (impl ClientSendStream, impl ClientRecvStream) {
         <C as Call>::call(self, method, args).await
     }
 }
@@ -174,7 +195,7 @@ pub trait CallInterceptor: Send + Sync {
         method: String,
         args: Args,
         next: &impl Call,
-    ) -> (impl SendStream, impl RecvStream);
+    ) -> (impl ClientSendStream, impl ClientRecvStream);
 }
 
 /// CallInterceptorOnce allows intercepting a call one time only.
@@ -185,7 +206,64 @@ pub trait CallInterceptorOnce: Send + Sync {
         method: String,
         args: Args,
         next: impl CallOnce,
-    ) -> (impl SendStream, impl RecvStream);
+    ) -> (impl ClientSendStream, impl ClientRecvStream);
+}
+
+/// ServerSendStream represents the sending side of a server stream.
+#[trait_variant::make(Send)]
+pub trait ServerSendStream: Send {
+    /// Sends headers on the stream.  The application must ensure it calls this
+    /// method before calling send_msg or enqueue_final_msg, and must not call
+    /// it more than once.
+    async fn send_headers(&mut self, headers: Headers);
+
+    /// Sends msg on the stream.  If Err(()) is returned, the message could not
+    /// be delivered because the stream was closed.  Future calls to
+    /// ServerSendStream will do nothing.
+    async fn send_msg(&mut self, msg: &dyn SendMessage) -> Result<(), ()>;
+
+    /// Sends msg on the stream and indicates the client has no further messages
+    /// to send.  gRPC will not send the message until the handler returns.
+    async fn enqueue_final_msg(self, msg: &dyn SendMessage);
+
+    /// Sets the trailing metadata to be sent on the stream when the handler
+    /// returns.
+    async fn set_trailers(&mut self, trailers: Metadata);
+}
+
+/// ServerRecvStream represents the receiving side of a server stream.
+#[trait_variant::make(Send)]
+pub trait ServerRecvStream: Send {
+    /// Returns the next item on the request stream, or Err(()) if the client
+    /// has either indicated it is done sending messages or has cancelled the
+    /// stream.
+    async fn next(&mut self, msg: &mut dyn RecvMessage) -> Result<(), ()>;
+}
+
+/// Handle begins the handling of an RPC.
+#[trait_variant::make(Send)]
+pub trait Handle: Send + Sync {
+    /// Handles an incoming call, receiving the send and receive streams to
+    /// interact with the caller.
+    async fn handle(
+        &self,
+        method: String,
+        headers: Headers,
+        tx: impl ServerSendStream + 'static,
+        rx: impl ServerRecvStream + 'static,
+    ) -> Result<(), ServerStatus>;
+}
+
+#[trait_variant::make(Send)]
+pub trait HandleInterceptor: Send + Sync {
+    /// Handles an incoming call, receiving the send and receive streams to
+    /// interact with the caller.
+    async fn handle(
+        &self,
+        method: String,
+        headers: Headers,
+        next: &impl Handle,
+    ) -> Result<(), ServerStatus>;
 }
 
 enum RecvStreamState {
@@ -206,7 +284,7 @@ pub struct RecvStreamValidator<R> {
 
 impl<R> RecvStreamValidator<R>
 where
-    R: RecvStream,
+    R: ClientRecvStream,
 {
     pub fn new(recv_stream: R, unary_response: bool) -> Self {
         Self {
@@ -218,9 +296,9 @@ where
 
     /// Sets the state to Done and produces a synthesized trailer item
     /// containing the error message.
-    fn error(&mut self, s: impl ToString) -> RecvStreamItem {
+    fn error(&mut self, s: impl ToString) -> ClientRecvStreamItem {
         self.state = RecvStreamState::Done;
-        RecvStreamItem::Trailers(Trailers {
+        ClientRecvStreamItem::Trailers(Trailers {
             status: Status {
                 code: 13, // TODO: Internal? TBD
                 _msg: s.to_string(),
@@ -229,20 +307,20 @@ where
     }
 }
 
-impl<R> RecvStream for RecvStreamValidator<R>
+impl<R> ClientRecvStream for RecvStreamValidator<R>
 where
-    R: RecvStream,
+    R: ClientRecvStream,
 {
-    async fn next(&mut self, msg: &mut dyn RecvMessage) -> RecvStreamItem {
+    async fn next(&mut self, msg: &mut dyn RecvMessage) -> ClientRecvStreamItem {
         // Never call the underlying RecvStream if done.
         if matches!(self.state, RecvStreamState::Done) {
-            return RecvStreamItem::StreamClosed;
+            return ClientRecvStreamItem::StreamClosed;
         }
 
         let item = self.recv_stream.next(msg).await;
 
         match item {
-            RecvStreamItem::Headers(_) => {
+            ClientRecvStreamItem::Headers(_) => {
                 if matches!(self.state, RecvStreamState::AwaitingHeaders) {
                     self.state = RecvStreamState::AwaitingMessagesOrTrailers;
                     item
@@ -250,7 +328,7 @@ where
                     self.error("stream received multiple headers")
                 }
             }
-            RecvStreamItem::Message => {
+            ClientRecvStreamItem::Message => {
                 if matches!(self.state, RecvStreamState::AwaitingMessagesOrTrailers) {
                     if self.unary_response {
                         self.state = RecvStreamState::AwaitingTrailers;
@@ -262,7 +340,7 @@ where
                     self.error("stream produced messages without headers")
                 }
             }
-            RecvStreamItem::Trailers(t) => {
+            ClientRecvStreamItem::Trailers(t) => {
                 if self.unary_response
                     && matches!(self.state, RecvStreamState::AwaitingMessagesOrTrailers)
                     && t.status.code == 0
@@ -272,9 +350,9 @@ where
                 // Always return a trailers result immediately - it is valid any
                 // time but sets the stream's state to Done.
                 self.state = RecvStreamState::Done;
-                RecvStreamItem::Trailers(t)
+                ClientRecvStreamItem::Trailers(t)
             }
-            RecvStreamItem::StreamClosed => {
+            ClientRecvStreamItem::StreamClosed => {
                 // Trailers were never received or we would be Done.
                 self.error("stream ended without trailers")
             }

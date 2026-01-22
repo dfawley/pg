@@ -9,9 +9,11 @@ use std::time::Duration;
 use std::{any::TypeId, marker::PhantomData};
 
 use crate::grpc::{
-    Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, MessageType, RecvMessage, RecvStream,
-    RecvStreamItem, RecvStreamValidator, SendMessage, SendStream, Status,
+    Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, ClientRecvStream, ClientRecvStreamItem,
+    ClientSendStream, MessageType, RecvMessage, RecvStreamValidator, SendMessage, Status,
 };
+
+mod server;
 
 pub struct UnaryCallBuilder<'a, C, Res, ReqMsgView> {
     channel: C,
@@ -67,7 +69,7 @@ where
         let mut res = ProtoRecvMessage::from_mut(res);
         loop {
             let i = rx.next(&mut res).await;
-            if let RecvStreamItem::Trailers(t) = i {
+            if let ClientRecvStreamItem::Trailers(t) = i {
                 return t.status;
             }
         }
@@ -166,9 +168,9 @@ where
                 loop {
                     let mut res = Res::default();
                     let i = rx.next(&mut ProtoRecvMessage::from_mut(&mut res)).await;
-                    if let RecvStreamItem::Message = i {
+                    if let ClientRecvStreamItem::Message = i {
                         yield Ok(res);
-                    } else if let RecvStreamItem::Trailers(t) = i {
+                    } else if let ClientRecvStreamItem::Trailers(t) = i {
                         yield Err(t.status);
                         return;
                     }
