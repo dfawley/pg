@@ -187,3 +187,97 @@ pub trait CallInterceptorOnce: Send + Sync {
         next: impl CallOnce,
     ) -> (impl SendStream, impl RecvStream);
 }
+
+enum RecvStreamState {
+    AwaitingHeaders,
+    AwaitingMessagesOrTrailers,
+    AwaitingTrailers,
+    Done,
+}
+
+/// RecvStreamValidator wraps a RecvStream and enforces proper RecvStream
+/// semantics on it so that protocol validation does not need to be handled by
+/// the consumer.
+pub struct RecvStreamValidator<R> {
+    recv_stream: R,
+    state: RecvStreamState,
+    unary_response: bool,
+}
+
+impl<R> RecvStreamValidator<R>
+where
+    R: RecvStream,
+{
+    pub fn new(recv_stream: R, unary_response: bool) -> Self {
+        Self {
+            recv_stream,
+            state: RecvStreamState::AwaitingHeaders,
+            unary_response,
+        }
+    }
+
+    /// Sets the state to Done and produces a synthesized trailer item
+    /// containing the error message.
+    fn error(&mut self, s: impl ToString) -> RecvStreamItem {
+        self.state = RecvStreamState::Done;
+        RecvStreamItem::Trailers(Trailers {
+            status: Status {
+                code: 13, // TODO: Internal? TBD
+                _msg: s.to_string(),
+            },
+        })
+    }
+}
+
+impl<R> RecvStream for RecvStreamValidator<R>
+where
+    R: RecvStream,
+{
+    async fn next(&mut self, msg: &mut dyn RecvMessage) -> RecvStreamItem {
+        // Never call the underlying RecvStream if done.
+        if matches!(self.state, RecvStreamState::Done) {
+            return RecvStreamItem::StreamClosed;
+        }
+
+        let item = self.recv_stream.next(msg).await;
+
+        match item {
+            RecvStreamItem::Headers(_) => {
+                if matches!(self.state, RecvStreamState::AwaitingHeaders) {
+                    self.state = RecvStreamState::AwaitingMessagesOrTrailers;
+                    item
+                } else {
+                    self.error("stream received multiple headers")
+                }
+            }
+            RecvStreamItem::Message => {
+                if matches!(self.state, RecvStreamState::AwaitingMessagesOrTrailers) {
+                    if self.unary_response {
+                        self.state = RecvStreamState::AwaitingTrailers;
+                    }
+                    item
+                } else if matches!(self.state, RecvStreamState::AwaitingTrailers) {
+                    self.error("unary stream produced multiple messages")
+                } else {
+                    self.error("stream produced messages without headers")
+                }
+            }
+            RecvStreamItem::Trailers(t) => {
+                if self.unary_response
+                    && matches!(self.state, RecvStreamState::AwaitingMessagesOrTrailers)
+                    && t.status.code == 0
+                {
+                    return self.error("unary stream produced zero messages");
+                }
+                // Always return a trailers result immediately - it is valid any
+                // time but sets the stream's state to Done.
+                self.state = RecvStreamState::Done;
+                RecvStreamItem::Trailers(t)
+            }
+            RecvStreamItem::StreamClosed => {
+                // Trailers were never received or we would be Done.
+                self.error("stream ended without trailers")
+            }
+        }
+    }
+}

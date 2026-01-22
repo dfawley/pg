@@ -10,7 +10,7 @@ use std::{any::TypeId, marker::PhantomData};
 
 use crate::grpc::{
     Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, MessageType, RecvMessage, RecvStream,
-    RecvStreamItem, SendMessage, SendStream, Status,
+    RecvStreamItem, RecvStreamValidator, SendMessage, SendStream, Status,
 };
 
 pub struct UnaryCallBuilder<'a, C, Res, ReqMsgView> {
@@ -60,7 +60,8 @@ where
         Res: Message + 'static,
         for<'b> Res::Mut<'b>: ClearAndParse + Send,
     {
-        let (tx, mut rx) = self.channel.call_once(self.method, self.args).await;
+        let (tx, rx) = self.channel.call_once(self.method, self.args).await;
+        let mut rx = RecvStreamValidator::new(rx, true);
         let req = &ProtoSendMessage::from_view(&self.req);
         tx.send_and_close(req).await;
         let mut res = ProtoRecvMessage::from_mut(res);
@@ -144,7 +145,7 @@ where
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
-            let (mut tx, mut rx) = self.channel.call_once(self.method, self.args).await;
+            let (mut tx, rx) = self.channel.call_once(self.method, self.args).await;
 
             // Create a stream for sending data.  Yields None after every
             // message to cause the receiver stream to be polled.
@@ -161,6 +162,7 @@ where
             // Err(trailers).  Wrapped in a Some to be combined with the
             // sender stream.
             let receiver = stream! {
+                let mut rx = RecvStreamValidator::new(rx, false);
                 loop {
                     let mut res = Res::default();
                     let i = rx.next(&mut ProtoRecvMessage::from_mut(&mut res)).await;
