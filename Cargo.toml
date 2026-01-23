@@ -11,6 +11,7 @@ protobuf = ["dep:protobuf"]
 async-stream = "0.3.6"
 async-trait = "0.1.89"
 futures-core = "0.3.31"
+futures-sink = "0.3.31"
 futures-util = "0.3.31"
 protobuf = { version = "4.33.0-release", optional = true }
 tokio = { version = "1.48.0", features = ["full"] }
