@@ -14,6 +14,7 @@ use crate::grpc::{
 };
 
 mod server;
+pub use server::*;
 
 pub struct UnaryCallBuilder<'a, C, Res, ReqMsgView> {
     channel: C,

@@ -242,7 +242,7 @@ pub trait ServerRecvStream: Send {
 
 /// Handle begins the handling of an RPC.
 #[trait_variant::make(Send)]
-pub trait Handle: Send + Sync {
+pub trait Handle: Send {
     /// Handles an incoming call, receiving the send and receive streams to
     /// interact with the caller.
     async fn handle(
@@ -255,7 +255,7 @@ pub trait Handle: Send + Sync {
 }
 
 #[trait_variant::make(Send)]
-pub trait HandleInterceptor: Send + Sync {
+pub trait HandleInterceptor: Send {
     /// Handles an incoming call, receiving the send and receive streams to
     /// interact with the caller.
     async fn handle(
@@ -358,4 +358,10 @@ where
             }
         }
     }
+}
+
+pub struct Server {}
+
+impl Server {
+    pub fn register(&mut self, path: impl ToString, h: impl Handle) {}
 }

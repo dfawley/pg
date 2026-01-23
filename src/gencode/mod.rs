@@ -1,6 +1,8 @@
 use crate::grpc::Call;
 use crate::grpc_protobuf::{BidiCallBuilder, UnaryCallBuilder};
 
+mod server;
+
 pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/protobuf_generated/generated.rs"));
 }

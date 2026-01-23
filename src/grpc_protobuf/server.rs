@@ -15,7 +15,7 @@ use crate::{
 };
 
 #[trait_variant::make(Send)]
-pub trait UnaryHandler: Send + Sync
+pub trait UnaryHandler: Send
 where
     for<'a> <Self::Req as MutProxied>::Mut<'a>: MessageMut<'a> + Send + Sync,
     for<'a> <Self::Res as Proxied>::View<'a>: MessageView<'a> + Send + Sync,
@@ -73,6 +73,38 @@ impl<T: UnaryHandler> Handle for T {
             Ok(())
         })
     }
+}
+
+#[macro_export]
+macro_rules! register_unary {
+    (
+        $server:expr,
+        $path:expr,
+        $service:expr,
+        $method:ident,
+        $Req:ty,
+        $Res:ty
+    ) => {{
+        struct MethodShim<S>(S);
+
+        impl<S> UnaryHandler for MethodShim<S>
+        where
+            S: std::ops::Deref + Send + Sync + 'static,
+            S::Target: MyService,
+        {
+            type Req = $Req;
+            type Res = $Res;
+
+            async fn unary(
+                &self,
+                req: <Self::Req as Proxied>::View<'_>,
+                res: <Self::Res as MutProxied>::Mut<'_>,
+            ) -> Result<(), ServerStatus> {
+                self.0.$method(req, res).await
+            }
+        }
+        $server.register($path, MethodShim($service.clone()));
+    }};
 }
 
 #[trait_variant::make(Send)]
