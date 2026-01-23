@@ -5,8 +5,8 @@ use futures_core::Stream;
 use protobuf::{MutProxied, Proxied};
 
 use crate::grpc::{Server, ServerStatus, Status};
-use crate::grpc_protobuf::UnaryHandler;
-use crate::register_unary;
+use crate::grpc_protobuf::{BidiHandle, BidiHandler, UnaryHandler};
+use crate::{register_bidi, register_unary};
 
 use super::pb::*;
 
@@ -22,7 +22,7 @@ pub trait MyService: Send + Sync + 'static {
         &self,
         requests: impl Stream<Item = MyRequest> + Send,
         responses: impl Sink<MyResponse> + Send,
-    ) -> Result<(), Status>;
+    ) -> Result<(), ServerStatus>;
 }
 
 pub fn register_my_service(server: &mut Server, service: impl MyService) {
@@ -32,6 +32,14 @@ pub fn register_my_service(server: &mut Server, service: impl MyService) {
         "/test.MyService/UnaryCall",
         service,
         unary_call,
+        MyRequest,
+        MyResponse
+    );
+    register_bidi!(
+        server,
+        "/test.MyService/StreamingCall",
+        service,
+        streaming_call,
         MyRequest,
         MyResponse
     );

@@ -122,7 +122,7 @@ where
     ) -> impl Future<Output = Result<(), ServerStatus>> + Send;
 }
 
-struct BidiHandle<B>(B);
+pub struct BidiHandle<B>(pub B);
 
 impl<B: BidiHandler> Handle for BidiHandle<B> {
     fn handle(
@@ -158,4 +158,36 @@ impl<B: BidiHandler> Handle for BidiHandle<B> {
             self.0.stream(reqs, resps).await
         })
     }
+}
+
+#[macro_export]
+macro_rules! register_bidi {
+    (
+        $server:expr,
+        $path:expr,
+        $service:expr,
+        $method:ident,
+        $Req:ty,
+        $Res:ty
+    ) => {{
+        struct MethodShim<S>(S);
+
+        impl<S> BidiHandler for MethodShim<S>
+        where
+            S: std::ops::Deref + Send + Sync + 'static,
+            S::Target: MyService,
+        {
+            type Req = $Req;
+            type Res = $Res;
+
+            async fn stream(
+                &self,
+                req_stream: impl Stream<Item = Self::Req> + Send,
+                res: impl Sink<Self::Res> + Send,
+            ) -> Result<(), ServerStatus> {
+                self.0.$method(req_stream, res).await
+            }
+        }
+        $server.register($path, BidiHandle(MethodShim($service.clone())));
+    }};
 }
