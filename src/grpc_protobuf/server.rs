@@ -1,9 +1,10 @@
 use std::{
-    marker::PhantomData,
     pin::Pin,
     task::{Context, Poll},
 };
 
+use async_stream::stream;
+use futures::sink::unfold;
 use futures_core::Stream;
 use futures_sink::Sink;
 use protobuf::{AsMut, AsView, Message, MessageMut, MessageView, MutProxied, Proxied};
@@ -70,6 +71,59 @@ impl<T: UnaryHandler> Handle for T {
             let sm = ProtoSendMessage::from_view(&res);
             tx.enqueue_final_msg(&sm).await;
             Ok(())
+        })
+    }
+}
+
+#[trait_variant::make(Send)]
+pub trait BidiHandler: Send + Sync
+where
+    for<'a> <Self::Req as MutProxied>::Mut<'a>: MessageMut<'a> + Send + Sync,
+    for<'a> <Self::Res as Proxied>::View<'a>: MessageView<'a> + Send + Sync,
+{
+    type Req: Message + 'static;
+    type Res: Message + 'static;
+    fn stream(
+        &self,
+        req_stream: impl Stream<Item = Self::Req> + Send,
+        res: impl Sink<Self::Res> + Send,
+    ) -> impl Future<Output = Result<(), ServerStatus>> + Send;
+}
+
+struct BidiHandle<B>(B);
+
+impl<B: BidiHandler> Handle for BidiHandle<B> {
+    fn handle(
+        &self,
+        _method: String,
+        _headers: Headers,
+        mut tx: impl ServerSendStream,
+        mut rx: impl ServerRecvStream,
+    ) -> impl Future<Output = Result<(), ServerStatus>> + Send {
+        ForceSend(async move {
+            let reqs = stream! {
+                loop {
+                    let mut req = B::Req::default();
+                    if rx.next(&mut ProtoRecvMessage::from_mut(&mut req)).await.is_err() {
+                        return;
+                    }
+                    yield req;
+                }
+            };
+
+            let resps = unfold(tx, |mut tx, res: B::Res| async move {
+                if tx
+                    .send_msg(&ProtoSendMessage::from_view(&res))
+                    .await
+                    .is_err()
+                {
+                    Err(())
+                } else {
+                    Ok(tx)
+                }
+            });
+
+            self.0.stream(reqs, resps).await
         })
     }
 }
