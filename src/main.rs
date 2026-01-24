@@ -1,6 +1,7 @@
 mod gencode;
 mod grpc;
 mod grpc_protobuf;
+mod server;
 
 use async_stream::stream;
 use futures_util::StreamExt as _;
@@ -9,10 +10,14 @@ use std::time::Duration;
 
 use gencode::MyServiceClientStub;
 use gencode::pb::*;
+use gencode::server::register_my_service;
 use grpc::Call;
 use grpc::CallExt as _;
 use grpc::Channel;
+use grpc::Server;
 use grpc_protobuf::SharedCall;
+
+use server::MyServiceImpl;
 
 // User-defined interceptors.
 use header_reader::*;
@@ -20,7 +25,9 @@ use interceptor::*;
 
 #[tokio::main]
 async fn main() {
-    let channel = Channel {};
+    let mut server = Server::default();
+    register_my_service(&mut server, MyServiceImpl {});
+    let channel = Channel { server };
     let client = MyServiceClientStub::new(channel.clone());
     unary(&client).await;
     bidi(&client).await;
@@ -158,9 +165,9 @@ mod header_reader {
     }
 
     impl<Delegate: ClientRecvStream> ClientRecvStream for HeaderReaderRecvStream<Delegate> {
-        async fn next(&mut self, msg: &mut dyn RecvMessage) -> ClientRecvStreamItem {
+        async fn next(&mut self, msg: &mut dyn RecvMessage) -> ClientResponseStreamItem {
             let i = self.delegate.next(msg).await;
-            if let ClientRecvStreamItem::Headers(h) = &i
+            if let ResponseStreamItem::Headers(h) = &i
                 && let Some(tx) = self.tx.take()
             {
                 let _ = tx.send(h.clone());
@@ -192,11 +199,11 @@ mod interceptor {
     }
 
     impl<Delegate: ClientRecvStream> ClientRecvStream for FailingRecvStreamInterceptor<Delegate> {
-        async fn next(&mut self, msg: &mut dyn RecvMessage) -> ClientRecvStreamItem {
+        async fn next(&mut self, msg: &mut dyn RecvMessage) -> ClientResponseStreamItem {
             let i = self.delegate.next(msg).await;
-            if let ClientRecvStreamItem::Trailers(mut t) = i {
+            if let ResponseStreamItem::Trailers(mut t) = i {
                 t.status.code = 3;
-                return ClientRecvStreamItem::Trailers(t);
+                return ResponseStreamItem::Trailers(t);
             }
             i
         }

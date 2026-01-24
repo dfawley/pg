@@ -4,6 +4,8 @@ mod intercept;
 pub use intercept::*;
 mod channel;
 pub use channel::*;
+mod server;
+pub use server::*;
 
 #[derive(Clone, Debug)]
 pub struct Status {
@@ -20,8 +22,6 @@ impl Status {
     }
 }
 
-pub struct ServerStatus(pub Status);
-
 pub struct Metadata;
 
 #[derive(Clone, Debug)]
@@ -31,9 +31,6 @@ pub struct Trailers {
     pub status: Status,
     // TODO: include Metadata.
 }
-
-#[derive(Clone, Default)]
-pub struct Channel;
 
 #[allow(unused)]
 pub trait SendMessage: Send + Sync {
@@ -101,40 +98,43 @@ pub trait ClientSendStream: Send {
     async fn send_and_close(self, msg: &dyn SendMessage);
 }
 
-/// RecvStreamItem represents an item received on a RecvStream.  See RecvStream
-/// for details on when and how these items are used.
-#[derive(Debug)]
-pub enum ClientRecvStreamItem {
-    /// Indicates headers were received on the stream and includes the headers.
-    Headers(Headers),
-    /// Indicates a message was received on the stream; the message provided to
-    /// RecvStream::next will be populated.
-    Message,
-    /// Indicates trailers were received on the stream and includes the trailers.
-    Trailers(Trailers),
-    /// Indicates the RecvStream was closed.  Trailers must have been provided
-    /// before this value may be used.
-    StreamClosed,
-}
-
-/// RecvStream represents the receiving side of a client stream.  Dropping the
-/// RecvStream results in early RPC cancellation if the server has not already
-/// terminated the stream first.
+/// ResponseStreamItem represents an item in a response stream (either server
+/// sending or client receiving).
 ///
-/// A RecvStream should always return the items exactly as follows:
+/// A response stream must always contain items exactly as follows:
 ///
 /// [Headers *Message] Trailers *StreamClosed
 ///
 /// That is: optionaly, a Headers value and any number of Message values
-/// (including zero), followed by a required Trailers value.  A RecvStream
-/// should not be used after next has returned Trailers, but it should return
-/// StreamClosed if it is.
+/// (including zero), followed by a required Trailers value.  A response stream
+/// should never be used after Trailers, but reads should return StreamClosed if
+/// it is.
+#[derive(Debug)]
+pub enum ResponseStreamItem<M> {
+    /// Indicates the headers for the stream.
+    Headers(Headers),
+    /// Indicates a message was received on the stream; the message provided to
+    /// RecvStream::next will be populated.
+    Message(M),
+    /// Indicates trailers were received on the stream and includes the trailers.
+    Trailers(Trailers),
+    /// Indicates the response stream was closed.  Trailers must have been
+    /// provided before this value may be used.
+    StreamClosed,
+}
+
+pub type ClientResponseStreamItem = ResponseStreamItem<()>;
+pub type ServerResponseStreamItem<'a> = ResponseStreamItem<&'a dyn SendMessage>;
+
+/// RecvStream represents the receiving side of a client stream.  Dropping the
+/// RecvStream results in early RPC cancellation if the server has not already
+/// terminated the stream first.
 #[trait_variant::make(Send)]
 pub trait ClientRecvStream: Send {
     /// Returns the next item on the response stream, or None if the stream has
     /// finished.  If the item is Message, then RecvMessage has received the
     /// contents of a message.
-    async fn next(&mut self, msg: &mut dyn RecvMessage) -> ClientRecvStreamItem;
+    async fn next(&mut self, msg: &mut dyn RecvMessage) -> ClientResponseStreamItem;
 }
 
 /// Call begins the dispatching of an RPC.
@@ -209,63 +209,6 @@ pub trait CallInterceptorOnce: Send + Sync {
     ) -> (impl ClientSendStream, impl ClientRecvStream);
 }
 
-/// ServerSendStream represents the sending side of a server stream.
-#[trait_variant::make(Send)]
-pub trait ServerSendStream: Send {
-    /// Sends headers on the stream.  The application must ensure it calls this
-    /// method before calling send_msg or enqueue_final_msg, and must not call
-    /// it more than once.
-    async fn send_headers(&mut self, headers: Headers);
-
-    /// Sends msg on the stream.  If Err(()) is returned, the message could not
-    /// be delivered because the stream was closed.  Future calls to
-    /// ServerSendStream will do nothing.
-    async fn send_msg(&mut self, msg: &dyn SendMessage) -> Result<(), ()>;
-
-    /// Sends msg on the stream and indicates the client has no further messages
-    /// to send.  gRPC will not send the message until the handler returns.
-    async fn enqueue_final_msg(self, msg: &dyn SendMessage);
-
-    /// Sets the trailing metadata to be sent on the stream when the handler
-    /// returns.
-    async fn set_trailers(&mut self, trailers: Metadata);
-}
-
-/// ServerRecvStream represents the receiving side of a server stream.
-#[trait_variant::make(Send)]
-pub trait ServerRecvStream: Send {
-    /// Returns the next item on the request stream, or Err(()) if the client
-    /// has either indicated it is done sending messages or has cancelled the
-    /// stream.
-    async fn next(&mut self, msg: &mut dyn RecvMessage) -> Result<(), ()>;
-}
-
-/// Handle begins the handling of an RPC.
-#[trait_variant::make(Send)]
-pub trait Handle: Send {
-    /// Handles an incoming call, receiving the send and receive streams to
-    /// interact with the caller.
-    async fn handle(
-        &self,
-        method: String,
-        headers: Headers,
-        tx: impl ServerSendStream + 'static,
-        rx: impl ServerRecvStream + 'static,
-    ) -> Result<(), ServerStatus>;
-}
-
-#[trait_variant::make(Send)]
-pub trait HandleInterceptor: Send {
-    /// Handles an incoming call, receiving the send and receive streams to
-    /// interact with the caller.
-    async fn handle(
-        &self,
-        method: String,
-        headers: Headers,
-        next: &impl Handle,
-    ) -> Result<(), ServerStatus>;
-}
-
 enum RecvStreamState {
     AwaitingHeaders,
     AwaitingMessagesOrTrailers,
@@ -296,9 +239,9 @@ where
 
     /// Sets the state to Done and produces a synthesized trailer item
     /// containing the error message.
-    fn error(&mut self, s: impl ToString) -> ClientRecvStreamItem {
+    fn error(&mut self, s: impl ToString) -> ClientResponseStreamItem {
         self.state = RecvStreamState::Done;
-        ClientRecvStreamItem::Trailers(Trailers {
+        ResponseStreamItem::Trailers(Trailers {
             status: Status {
                 code: 13, // TODO: Internal? TBD
                 _msg: s.to_string(),
@@ -311,16 +254,16 @@ impl<R> ClientRecvStream for RecvStreamValidator<R>
 where
     R: ClientRecvStream,
 {
-    async fn next(&mut self, msg: &mut dyn RecvMessage) -> ClientRecvStreamItem {
+    async fn next(&mut self, msg: &mut dyn RecvMessage) -> ClientResponseStreamItem {
         // Never call the underlying RecvStream if done.
         if matches!(self.state, RecvStreamState::Done) {
-            return ClientRecvStreamItem::StreamClosed;
+            return ResponseStreamItem::StreamClosed;
         }
 
         let item = self.recv_stream.next(msg).await;
 
         match item {
-            ClientRecvStreamItem::Headers(_) => {
+            ResponseStreamItem::Headers(_) => {
                 if matches!(self.state, RecvStreamState::AwaitingHeaders) {
                     self.state = RecvStreamState::AwaitingMessagesOrTrailers;
                     item
@@ -328,7 +271,7 @@ where
                     self.error("stream received multiple headers")
                 }
             }
-            ClientRecvStreamItem::Message => {
+            ResponseStreamItem::Message(_) => {
                 if matches!(self.state, RecvStreamState::AwaitingMessagesOrTrailers) {
                     if self.unary_response {
                         self.state = RecvStreamState::AwaitingTrailers;
@@ -340,7 +283,7 @@ where
                     self.error("stream produced messages without headers")
                 }
             }
-            ClientRecvStreamItem::Trailers(t) => {
+            ResponseStreamItem::Trailers(t) => {
                 if self.unary_response
                     && matches!(self.state, RecvStreamState::AwaitingMessagesOrTrailers)
                     && t.status.code == 0
@@ -350,18 +293,12 @@ where
                 // Always return a trailers result immediately - it is valid any
                 // time but sets the stream's state to Done.
                 self.state = RecvStreamState::Done;
-                ClientRecvStreamItem::Trailers(t)
+                ResponseStreamItem::Trailers(t)
             }
-            ClientRecvStreamItem::StreamClosed => {
+            ResponseStreamItem::StreamClosed => {
                 // Trailers were never received or we would be Done.
                 self.error("stream ended without trailers")
             }
         }
     }
-}
-
-pub struct Server {}
-
-impl Server {
-    pub fn register(&mut self, path: impl ToString, h: impl Handle) {}
 }

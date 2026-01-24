@@ -1,3 +1,4 @@
+use std::future::ready;
 use std::sync::Arc;
 
 use futures::Sink;
@@ -16,13 +17,23 @@ pub trait MyService: Send + Sync + 'static {
         &self,
         req: MyRequestView<'_>,
         res: MyResponseMut<'_>,
-    ) -> Result<(), ServerStatus>;
+    ) -> Result<(), ServerStatus> {
+        ready(Err(ServerStatus(Status {
+            code: 12,
+            _msg: "unary_call not implemented".to_string(),
+        })))
+    }
 
     async fn streaming_call(
         &self,
         requests: impl Stream<Item = MyRequest> + Send,
         responses: impl Sink<MyResponse> + Send,
-    ) -> Result<(), ServerStatus>;
+    ) -> Result<(), ServerStatus> {
+        ready(Err(ServerStatus(Status {
+            code: 12,
+            _msg: "streaming_call not implemented".to_string(),
+        })))
+    }
 }
 
 pub fn register_my_service(server: &mut Server, service: impl MyService) {

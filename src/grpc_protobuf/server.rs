@@ -3,19 +3,21 @@ use std::{
     task::{Context, Poll},
 };
 
-use async_stream::stream;
-use futures::sink::unfold;
+use futures::{future::join, sink::unfold};
 use futures_core::Stream;
 use futures_sink::Sink;
 use protobuf::{AsMut, AsView, Message, MessageMut, MessageView, MutProxied, Proxied};
 
 use crate::{
-    grpc::{Handle, Headers, ServerRecvStream, ServerSendStream, ServerStatus, Status},
+    grpc::{
+        Handle, Headers, ResponseStreamItem, ServerRecvStream, ServerSendStream, ServerStatus,
+        Trailers,
+    },
     grpc_protobuf::{ProtoRecvMessage, ProtoSendMessage},
 };
 
 #[trait_variant::make(Send)]
-pub trait UnaryHandler: Send
+pub trait UnaryHandler: Send + Sync
 where
     for<'a> <Self::Req as MutProxied>::Mut<'a>: MessageMut<'a> + Send + Sync,
     for<'a> <Self::Res as Proxied>::View<'a>: MessageView<'a> + Send + Sync,
@@ -50,27 +52,21 @@ impl<T: UnaryHandler> Handle for T {
         &self,
         _method: String,
         _headers: Headers,
-        tx: impl ServerSendStream,
+        mut tx: impl ServerSendStream,
         mut rx: impl ServerRecvStream,
-    ) -> impl Future<Output = Result<(), ServerStatus>> + Send {
+    ) -> impl Future<Output = ()> + Send {
         ForceSend(async move {
             let mut req = T::Req::default();
-            if rx
-                .next(&mut ProtoRecvMessage::from_mut(&mut req))
-                .await
-                .is_err()
-            {
-                return Err(ServerStatus(Status {
-                    code: 13,
-                    _msg: "error receiving request message".to_string(),
-                }));
-            }
-
+            rx.next(&mut ProtoRecvMessage::from_mut(&mut req)).await;
             let mut res = T::Res::default();
-            self.unary(req.as_view(), res.as_mut()).await?;
+            let status = self.unary(req.as_view(), res.as_mut()).await;
+            if let Err(ServerStatus(status)) = status {
+                tx.send(ResponseStreamItem::Trailers(Trailers { status }))
+                    .await;
+                return;
+            }
             let sm = ProtoSendMessage::from_view(&res);
-            tx.enqueue_final_msg(&sm).await;
-            Ok(())
+            tx.send(ResponseStreamItem::Message(&sm)).await;
         })
     }
 }
@@ -129,33 +125,25 @@ impl<B: BidiHandler> Handle for BidiHandle<B> {
         &self,
         _method: String,
         _headers: Headers,
-        mut tx: impl ServerSendStream,
+        tx: impl ServerSendStream,
         mut rx: impl ServerRecvStream,
-    ) -> impl Future<Output = Result<(), ServerStatus>> + Send {
+    ) -> impl Future<Output = ()> + Send {
         ForceSend(async move {
-            let reqs = stream! {
+            let send_fut = async move {
                 loop {
                     let mut req = B::Req::default();
-                    if rx.next(&mut ProtoRecvMessage::from_mut(&mut req)).await.is_err() {
-                        return;
-                    }
-                    yield req;
+                    rx.next(&mut ProtoRecvMessage::from_mut(&mut req)).await;
                 }
             };
+            let recv_fut = async move {
+                let resps = unfold(tx, |mut tx, res: B::Res| async move {
+                    let msg = &ProtoSendMessage::from_view(&res);
+                    tx.send(ResponseStreamItem::Message(msg)).await;
+                    Ok::<_, ()>(tx)
+                });
+            };
 
-            let resps = unfold(tx, |mut tx, res: B::Res| async move {
-                if tx
-                    .send_msg(&ProtoSendMessage::from_view(&res))
-                    .await
-                    .is_err()
-                {
-                    Err(())
-                } else {
-                    Ok(tx)
-                }
-            });
-
-            self.0.stream(reqs, resps).await
+            join(send_fut, recv_fut).await;
         })
     }
 }

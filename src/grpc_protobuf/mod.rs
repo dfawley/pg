@@ -9,8 +9,8 @@ use std::time::Duration;
 use std::{any::TypeId, marker::PhantomData};
 
 use crate::grpc::{
-    Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, ClientRecvStream, ClientRecvStreamItem,
-    ClientSendStream, MessageType, RecvMessage, RecvStreamValidator, SendMessage, Status,
+    Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, ClientRecvStream, ClientSendStream,
+    MessageType, RecvMessage, RecvStreamValidator, ResponseStreamItem, SendMessage, Status,
 };
 
 mod server;
@@ -70,7 +70,7 @@ where
         let mut res = ProtoRecvMessage::from_mut(res);
         loop {
             let i = rx.next(&mut res).await;
-            if let ClientRecvStreamItem::Trailers(t) = i {
+            if let ResponseStreamItem::Trailers(t) = i {
                 return t.status;
             }
         }
@@ -169,9 +169,9 @@ where
                 loop {
                     let mut res = Res::default();
                     let i = rx.next(&mut ProtoRecvMessage::from_mut(&mut res)).await;
-                    if let ClientRecvStreamItem::Message = i {
+                    if let ResponseStreamItem::Message(_) = i {
                         yield Ok(res);
-                    } else if let ClientRecvStreamItem::Trailers(t) = i {
+                    } else if let ResponseStreamItem::Trailers(t) = i {
                         yield Err(t.status);
                         return;
                     }
