@@ -10,8 +10,8 @@ use protobuf::{AsMut, AsView, Message, MessageMut, MessageView, MutProxied, Prox
 
 use crate::{
     grpc::{
-        Handle, Headers, ResponseStreamItem, ServerRecvStream, ServerSendStream, ServerStatus,
-        Trailers,
+        Handle, Headers, Register, ResponseStreamItem, ServerRecvStream, ServerSendStream,
+        ServerStatus, Trailers,
     },
     grpc_protobuf::{ProtoRecvMessage, ProtoSendMessage},
 };
@@ -71,6 +71,7 @@ impl<T: UnaryHandler> Handle for T {
     }
 }
 
+#[allow(clippy::crate_in_macro_def)]
 #[macro_export]
 macro_rules! register_unary {
     (
@@ -99,7 +100,7 @@ macro_rules! register_unary {
                 self.0.$method(req, res).await
             }
         }
-        $server.register($path, MethodShim($service.clone()));
+        crate::grpc::Register::register($server, $path, MethodShim($service.clone()));
     }};
 }
 
@@ -148,6 +149,7 @@ impl<B: BidiHandler> Handle for BidiHandle<B> {
     }
 }
 
+#[allow(clippy::crate_in_macro_def)]
 #[macro_export]
 macro_rules! register_bidi {
     (
@@ -176,6 +178,6 @@ macro_rules! register_bidi {
                 self.0.$method(req_stream, res).await
             }
         }
-        $server.register($path, BidiHandle(MethodShim($service.clone())));
+        crate::grpc::Register::register($server, $path, BidiHandle(MethodShim($service.clone())));
     }};
 }
