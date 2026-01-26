@@ -18,11 +18,15 @@ impl Call for Channel {
         _args: Args,
     ) -> (impl ClientSendStream, impl ClientRecvStream) {
         println!("starting call for {method}");
+        let mut start = 0;
+        if method == "unary_call" {
+            start = 2;
+        }
         (
             ChannelSendStream {},
             ChannelRecvStream {
                 state: Some(ResponseStreamItem::Headers(Headers {})),
-                cnt: Mutex::new(0),
+                cnt: Mutex::new(start),
             },
         )
         /*
