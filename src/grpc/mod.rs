@@ -20,15 +20,7 @@ impl Status {
             _msg: String::new(),
         }
     }
-    pub fn unknown(msg: impl ToString) -> Self {
-        Status {
-            code: 2,
-            _msg: msg.to_string(),
-        }
-    }
 }
-
-pub struct Metadata;
 
 #[derive(Clone, Debug)]
 pub struct Headers {}
@@ -79,6 +71,7 @@ impl dyn SendMessage + '_ {
     }
 }
 
+#[allow(unused)]
 impl dyn RecvMessage + '_ {
     /// Downcasts the RecvMessage to T::Target if the RecvMessage contains a T.
     pub fn downcast_mut<T: MessageType>(&mut self) -> Option<&mut T::Target<'_>> {
