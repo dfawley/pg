@@ -172,7 +172,9 @@ where
                     if let ResponseStreamItem::Message(_) = i {
                         yield Ok(res);
                     } else if let ResponseStreamItem::Trailers(t) = i {
-                        yield Err(t.status);
+                        if t.status.code != 0 {
+                            yield Err(t.status);
+                        }
                         return;
                     }
                 }

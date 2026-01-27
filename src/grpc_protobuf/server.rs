@@ -1,17 +1,24 @@
 use std::{
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
 };
 
-use futures::{future::join, sink::unfold};
+use async_stream::stream;
+use futures::{FutureExt, future::join, sink::unfold};
 use futures_core::Stream;
 use futures_sink::Sink;
-use protobuf::{AsMut, AsView, Message, MessageMut, MessageView, MutProxied, Proxied};
+use protobuf::{AsMut, AsView, Message, MessageMut, MessageView, MutProxied, Proxied, Serialize};
+use tokio::{
+    select,
+    sync::{Mutex, mpsc},
+};
+use tokio_util::sync::PollSender;
 
 use crate::{
     grpc::{
-        Handle, Headers, Register, ResponseStreamItem, ServerRecvStream, ServerSendStream,
-        ServerStatus, Trailers,
+        Handle, Headers, ResponseStreamItem, SendMessage, ServerRecvStream, ServerSendStream,
+        ServerStatus, Status, Trailers,
     },
     grpc_protobuf::{ProtoRecvMessage, ProtoSendMessage},
 };
@@ -52,12 +59,14 @@ impl<T: UnaryHandler> Handle for T {
         &self,
         _method: String,
         _headers: Headers,
-        mut tx: impl ServerSendStream,
-        mut rx: impl ServerRecvStream,
+        mut tx: impl ServerSendStream + Send,
+        mut rx: impl ServerRecvStream + Send,
     ) -> impl Future<Output = ()> + Send {
         ForceSend(async move {
             let mut req = T::Req::default();
-            rx.next(&mut ProtoRecvMessage::from_mut(&mut req)).await;
+            rx.next(&mut ProtoRecvMessage::from_mut(&mut req))
+                .await
+                .unwrap();
             let mut res = T::Res::default();
             let status = self.unary(req.as_view(), res.as_mut()).await;
             if let Err(ServerStatus(status)) = status {
@@ -67,6 +76,10 @@ impl<T: UnaryHandler> Handle for T {
             }
             let sm = ProtoSendMessage::from_view(&res);
             tx.send(ResponseStreamItem::Message(&sm)).await;
+            tx.send(ResponseStreamItem::Trailers(Trailers {
+                status: Status::ok(),
+            }))
+            .await;
         })
     }
 }
@@ -110,8 +123,8 @@ where
     for<'a> <Self::Req as MutProxied>::Mut<'a>: MessageMut<'a> + Send + Sync,
     for<'a> <Self::Res as Proxied>::View<'a>: MessageView<'a> + Send + Sync,
 {
-    type Req: Message + 'static;
-    type Res: Message + 'static;
+    type Req: Message + Send + Sync + 'static;
+    type Res: Message + Proxied + Send + Sync + 'static;
     fn stream(
         &self,
         req_stream: impl Stream<Item = Self::Req> + Send,
@@ -126,26 +139,61 @@ impl<B: BidiHandler> Handle for BidiHandle<B> {
         &self,
         _method: String,
         _headers: Headers,
-        tx: impl ServerSendStream,
-        mut rx: impl ServerRecvStream,
+        mut tx: impl ServerSendStream + Send,
+        mut rx: impl ServerRecvStream + Send,
     ) -> impl Future<Output = ()> + Send {
-        ForceSend(async move {
-            let send_fut = async move {
+        async move {
+            let request_stream = stream! {
                 loop {
                     let mut req = B::Req::default();
-                    rx.next(&mut ProtoRecvMessage::from_mut(&mut req)).await;
+                    {
+                         let mut wrapper = &mut ProtoRecvMessage::from_mut(&mut req);
+                         if rx.next(wrapper).await.is_err() {
+                             return;
+                         }
+                    }
+                    yield req;
                 }
             };
-            let recv_fut = async move {
-                let resps = unfold(tx, |mut tx, res: B::Res| async move {
-                    let msg = &ProtoSendMessage::from_view(&res);
-                    tx.send(ResponseStreamItem::Message(msg)).await;
-                    Ok::<_, ()>(tx)
-                });
-            };
 
-            join(send_fut, recv_fut).await;
-        })
+            let (user_tx, rx_inner) = mpsc::channel::<B::Res>(1);
+            let mut channel_rx = Some(rx_inner);
+            let user_sink = PollSender::new(user_tx);
+            let mut handler_fut = Box::pin(self.0.stream(request_stream, user_sink));
+
+            let status = loop {
+                select! {
+                    result = &mut handler_fut => {
+                        if let Some(mut rx) = channel_rx {
+                            while let Ok(msg) = rx.try_recv() {
+                                tx.send(ResponseStreamItem::Message(&ProtoSendMessage::from_view(&msg.as_view()))).await;
+                            }
+                        }
+
+                        let status = match result {
+                            Ok(()) => Status::ok(),
+                            Err(ss) => ss.0,
+                        };
+                        break status;
+                    }
+
+                    maybe_msg =
+                        channel_rx.as_mut().expect("guard").recv()
+                    , if channel_rx.is_some() => {
+                        match maybe_msg {
+                            Some(msg) => {
+                                tx.send(ResponseStreamItem::Message(&ProtoSendMessage::from_view(&msg.as_view()))).await;
+                            }
+                            None => {
+                                channel_rx = None;
+                            }
+                        }
+                    }
+                }
+            };
+            tx.send(ResponseStreamItem::Trailers(Trailers { status }))
+                .await;
+        }
     }
 }
 

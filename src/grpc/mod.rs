@@ -20,6 +20,12 @@ impl Status {
             _msg: String::new(),
         }
     }
+    pub fn unknown(msg: impl ToString) -> Self {
+        Status {
+            code: 2,
+            _msg: msg.to_string(),
+        }
+    }
 }
 
 pub struct Metadata;

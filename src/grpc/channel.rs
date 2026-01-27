@@ -1,8 +1,7 @@
-use std::sync::Mutex;
 use std::time;
 
-use crate::gencode::pb::*;
-use crate::grpc_protobuf::ProtoRecvMessage;
+use tokio::sync::mpsc;
+use tokio::task;
 
 use super::*;
 
@@ -18,34 +17,31 @@ impl Call for Channel {
         _args: Args,
     ) -> (impl ClientSendStream, impl ClientRecvStream) {
         println!("starting call for {method}");
-        let mut start = 0;
-        if method == "unary_call" {
-            start = 2;
-        }
-        (
-            ChannelSendStream {},
-            ChannelRecvStream {
-                state: Some(ResponseStreamItem::Headers(Headers {})),
-                cnt: Mutex::new(start),
-            },
-        )
-        /*
         let (tx1, rx1) = mpsc::channel(1);
         let (tx2, rx2) = mpsc::channel(1);
-        task::spawn(async move {
-            let handler = self.server.handlers.lock().unwrap().get(&method).unwrap();
-            let res = handler
-                .grpc_handle(
-                    method,
-                    Headers {},
-                    GrpcServerSendStream { tx2 },
-                    GrpcServerRecvStream { rx1 },
-                )
+        let handler = self.server.handlers.lock().unwrap().get(&method).cloned();
+        if let Some(handler) = handler {
+            task::spawn(async move {
+                handler
+                    .grpc_handle(
+                        method,
+                        Headers {},
+                        GrpcServerSendStream::new(tx2),
+                        GrpcServerRecvStream { rx: rx1 },
+                    )
+                    .await;
+            });
+        } else {
+            let _ = tx2
+                .send(ResponseStreamItem::Trailers(Trailers {
+                    status: Status {
+                        code: 13,
+                        _msg: "method not registered on server".to_string(),
+                    },
+                }))
                 .await;
-            let _ = tx2.send(res);
-        });
-        (ChannelSendStream { tx1 }, ChannelRecvStream { rx2 })
-        */
+        }
+        (ChannelSendStream { tx: tx1 }, ChannelRecvStream { rx: rx2 })
     }
 }
 
@@ -54,52 +50,39 @@ pub struct Args {
     pub timeout: time::Duration,
 }
 
-pub struct ChannelSendStream {}
+pub struct ChannelSendStream {
+    tx: mpsc::Sender<Vec<u8>>,
+}
 
 impl ClientSendStream for ChannelSendStream {
-    async fn send_msg(&mut self, _msg: &dyn SendMessage) -> Result<(), ()> {
-        Ok(()) // Err(()) on error sending
+    async fn send_msg(&mut self, msg: &dyn SendMessage) -> Result<(), ()> {
+        let _ = self.tx.send(msg.encode().pop().unwrap()).await;
+        Ok(())
     }
-    async fn send_and_close(self, _msg: &dyn SendMessage) {
-        // Error doesn't matter when sending final message.
+    async fn send_and_close(mut self, msg: &dyn SendMessage) {
+        let _ = self.send_msg(msg).await;
     }
 }
 
 pub struct ChannelRecvStream {
-    state: Option<ClientResponseStreamItem>,
-    cnt: Mutex<i32>,
+    rx: mpsc::Receiver<ResponseStreamItem<Vec<u8>>>,
 }
 
 impl ClientRecvStream for ChannelRecvStream {
     async fn next(&mut self, msg: &mut dyn RecvMessage) -> ClientResponseStreamItem {
-        let ret = self.state.take();
-        match ret {
-            Some(ResponseStreamItem::Headers(_)) => {
-                self.state = Some(ResponseStreamItem::Message(()));
-            }
-            Some(ResponseStreamItem::Message(_)) => {
-                let mut cnt = self.cnt.lock().unwrap();
-                if let Some(inner_msg) = msg.downcast_mut::<ProtoRecvMessage<MyResponse>>() {
-                    if *cnt == 2 {
-                        // Last message; next time return trailers.
-                        self.state = Some(ResponseStreamItem::Trailers(Trailers {
-                            status: Status::ok(),
-                        }));
-                    } else {
-                        self.state = Some(ResponseStreamItem::Message(()));
-                    }
-                    *cnt += 1;
-                    inner_msg.set_result(*cnt);
-                } else {
-                    panic!();
-                }
-            }
-            _ => {}
+        let i = self.rx.recv().await;
+        if i.is_none() {
+            return ClientResponseStreamItem::StreamClosed;
         }
-        if let Some(ret) = ret {
-            ret
-        } else {
-            ResponseStreamItem::StreamClosed
+        let i = i.unwrap();
+        match i {
+            ResponseStreamItem::Message(m) => {
+                msg.decode(vec![m]);
+                ClientResponseStreamItem::Message(())
+            }
+            ResponseStreamItem::Headers(headers) => ResponseStreamItem::Headers(headers),
+            ResponseStreamItem::Trailers(trailers) => ResponseStreamItem::Trailers(trailers),
+            ResponseStreamItem::StreamClosed => ResponseStreamItem::StreamClosed,
         }
     }
 }

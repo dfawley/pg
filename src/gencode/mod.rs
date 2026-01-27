@@ -29,7 +29,7 @@ impl<C: Call> MyServiceClientStub<C> {
     where
         ReqMsgView: AsView<Proxied = MyRequest> + Send + Sync,
     {
-        UnaryCallBuilder::new(&self.channel, "unary_call".to_string(), req)
+        UnaryCallBuilder::new(&self.channel, "/test.MyService/UnaryCall".to_string(), req)
     }
 
     pub fn streaming_call<ReqStream>(
@@ -39,6 +39,10 @@ impl<C: Call> MyServiceClientStub<C> {
     where
         ReqStream: Unpin + Stream<Item = MyRequest> + Send,
     {
-        BidiCallBuilder::new(&self.channel, "streaming_call".to_string(), req_stream)
+        BidiCallBuilder::new(
+            &self.channel,
+            "/test.MyService/StreamingCall".to_string(),
+            req_stream,
+        )
     }
 }

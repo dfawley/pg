@@ -48,7 +48,7 @@ async fn unary(client: &MyServiceClientStub<impl Call>) {
     {
         // Using an owned message for request and response:
         let res = client.unary_call(proto!(MyRequest { query: 1 })).await;
-        println!("Owned response: {:?}", res);
+        println!("Owned response: {:?}", res.map(|r| r.result()));
     }
 
     {
@@ -59,7 +59,7 @@ async fn unary(client: &MyServiceClientStub<impl Call>) {
             .unary_call(req.as_view())
             .with_response_message(&mut resp)
             .await;
-        println!("Mut response: {:?} / {:?}", resp, status);
+        println!("Mut response: {:?} / {:?}", resp.result(), status);
     }
 
     {
@@ -68,7 +68,7 @@ async fn unary(client: &MyServiceClientStub<impl Call>) {
             .unary_call(MyRequestView::default())
             .with_timeout(Duration::from_secs(2))
             .await;
-        println!("Owned response with timeout: {:?}", res);
+        println!("Owned response with timeout: {:?}", res.map(|r| r.result()));
     }
 
     {
@@ -79,7 +79,11 @@ async fn unary(client: &MyServiceClientStub<impl Call>) {
             .with_timeout(Duration::from_secs(2))
             .with_response_message(&mut resp.as_mut())
             .await;
-        println!("Mut response with timeout: {:?} / {:?}", resp, status);
+        println!(
+            "Mut response with timeout: {:?} / {:?}",
+            resp.result(),
+            status
+        );
     }
 
     {
@@ -89,7 +93,11 @@ async fn unary(client: &MyServiceClientStub<impl Call>) {
             .unary_call(proto!(MyRequest { query: 9 }))
             .with_timeout(Duration::from_secs(2));
         let (a, b) = tokio::join!(f1, f2);
-        println!("Joined: {:?}, {:?}", a, b);
+        println!(
+            "Joined: {:?}, {:?}",
+            a.map(|r| r.result()),
+            b.map(|r| r.result())
+        );
     }
     println!();
 }
@@ -101,8 +109,13 @@ async fn bidi(client: &MyServiceClientStub<impl Call>) {
             yield proto!(MyRequest { query: 20 });
         });
         let mut res = client.streaming_call(requests).await;
+        let mut saw_err = false;
         while let Some(res) = res.next().await {
-            println!("stream: {:?}", res);
+            saw_err |= res.is_err();
+            println!("stream: {:?}", res.map(|r| r.result()));
+        }
+        if !saw_err {
+            println!("stream terminated successfully")
         }
     }
     println!();

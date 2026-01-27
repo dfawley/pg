@@ -1,3 +1,8 @@
+use std::pin::pin;
+
+use futures::{Sink, SinkExt, Stream, StreamExt};
+use protobuf::proto;
+
 use crate::{
     gencode::{pb::*, server::MyService},
     grpc::ServerStatus,
@@ -12,6 +17,39 @@ impl MyService for MyServiceImpl {
         mut res: MyResponseMut<'_>,
     ) -> Result<(), ServerStatus> {
         res.set_result(req.query());
+        Ok(())
+    }
+
+    async fn streaming_call(
+        &self,
+        requests: impl Stream<Item = MyRequest> + Send,
+        responses: impl Sink<MyResponse> + Send,
+    ) -> Result<(), ServerStatus> {
+        let mut requests = pin!(requests);
+        let receive = async move {
+            while let Some(req) = requests.next().await {
+                println!("Server saw request {req:?}");
+            }
+        };
+        let mut responses = pin!(responses);
+        let send = async move {
+            if responses
+                .send(proto!(MyResponse { result: 12 }))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            if responses
+                .send(proto!(MyResponse { result: 34 }))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let _ = responses.send(proto!(MyResponse { result: 56 })).await;
+        };
+        tokio::join!(send, receive);
         Ok(())
     }
 }
