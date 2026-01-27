@@ -16,7 +16,6 @@ impl Call for Channel {
         method: String,
         _args: Args,
     ) -> (impl ClientSendStream, impl ClientRecvStream) {
-        println!("starting call for {method}");
         let (tx1, rx1) = mpsc::channel(1);
         let (tx2, rx2) = mpsc::channel(1);
         let handler = self.server.handlers.lock().unwrap().get(&method).cloned();

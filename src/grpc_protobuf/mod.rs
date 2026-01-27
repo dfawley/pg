@@ -1,10 +1,11 @@
 use async_stream::stream;
+use futures::{Sink, SinkExt as _};
 use futures_core::Stream;
-use futures_util::{StreamExt, stream::select};
+use futures_util::{StreamExt as _, stream::select};
 use protobuf::{
     AsMut, AsView, ClearAndParse, Message, MessageView, MutProxied, Proxied, Serialize,
 };
-use std::pin::Pin;
+use std::pin::{Pin, pin};
 use std::time::Duration;
 use std::{any::TypeId, marker::PhantomData};
 
@@ -107,29 +108,31 @@ where
     }
 }
 
-pub struct BidiCallBuilder<'a, C, ReqStream: Stream, Res> {
+pub struct BidiCallBuilder<'a, C, ReqStream, Res, ResSink> {
     channel: C,
     method: String,
     req_stream: ReqStream,
+    res_sink: ResSink,
     args: Args,
-    _phantom: PhantomData<&'a Res>,
+    _phantom: &'a PhantomData<Res>,
 }
 
-impl<'a, C, ReqStream: Stream, Res> BidiCallBuilder<'a, C, ReqStream, Res> {
-    pub fn new(channel: C, method: String, req: ReqStream) -> Self {
+impl<'a, C, ReqStream, Res, ResSink> BidiCallBuilder<'a, C, ReqStream, Res, ResSink> {
+    pub fn new(channel: C, method: String, req_stream: ReqStream, res_sink: ResSink) -> Self {
         Self {
             channel,
-            req_stream: req,
             method,
+            req_stream,
+            res_sink,
             args: Default::default(),
-            _phantom: Default::default(),
+            _phantom: &PhantomData,
         }
     }
 }
 
 pub type ResponseStream<'a, Res> = Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send + 'a>>;
 
-impl<'a, C, ReqStream, Res> IntoFuture for BidiCallBuilder<'a, C, ReqStream, Res>
+impl<'a, C, ReqStream, Res, ResSink> IntoFuture for BidiCallBuilder<'a, C, ReqStream, Res, ResSink>
 where
     // We can make one call on C.
     C: CallOnce + 'a,
@@ -140,10 +143,12 @@ where
     for<'b> <ReqStream::Item as Proxied>::View<'b>: MessageView<'b>,
     // Res is a proto message. (Ideally we could just require "Message" and
     // protobuf would automatically include the rest.)
+    ResSink: Unpin + Sink<Res> + Send + 'a,
+    ResSink::Error: Send,
     Res: Message + ClearAndParse + 'static,
     for<'b> Res::Mut<'b>: ClearAndParse + Send,
 {
-    type Output = ResponseStream<'a, Res>;
+    type Output = Result<(), Status>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(mut self) -> Self::IntoFuture {
@@ -161,30 +166,31 @@ where
                 }
             };
 
-            // Create a stream for receiving data.  Yields Ok(response) or
-            // Err(trailers).  Wrapped in a Some to be combined with the
-            // sender stream.
+            // Create a stream for receiving data.  Yields None or Some(trailers).
             let receiver = stream! {
                 let mut rx = RecvStreamValidator::new(rx, false);
                 loop {
                     let mut res = Res::default();
                     let i = rx.next(&mut ProtoRecvMessage::from_mut(&mut res)).await;
                     if let ResponseStreamItem::Message(_) = i {
-                        yield Ok(res);
+                        // TODO: If the sink errors, then what do we do?
+                        let _ = self.res_sink.send(res).await;
+                        yield None;
                     } else if let ResponseStreamItem::Trailers(t) = i {
-                        if t.status.code != 0 {
-                            yield Err(t.status);
-                        }
+                        yield Some(t.status);
                         return;
                     }
                 }
-            }
-            .map(Some);
+            };
 
-            // Filter out sender stream None values and propagate the receiver
-            // stream only.
-            Box::pin(select(sender, receiver).filter_map(|item| async move { item }))
-                as ResponseStream<'_, Res>
+            // Filter out None values and propagate the status only.
+            let status = select(sender, receiver).filter_map(|item| async move { item });
+            let status = pin!(status).next().await.unwrap();
+            if status.code == 0 {
+                Ok(())
+            } else {
+                Err(status)
+            }
         })
     }
 }
@@ -203,8 +209,11 @@ impl<'a, C, Res, ReqMsg> CallArgs for UnaryCallBuilder<'a, C, Res, ReqMsg> {
     }
 }
 
-impl<'a, C, ReqStream: Stream, Res> private::Sealed for BidiCallBuilder<'a, C, ReqStream, Res> {}
-impl<'a, C, ReqStream: Stream, Res> CallArgs for BidiCallBuilder<'a, C, ReqStream, Res> {
+impl<'a, C, ReqStream, Res, ResSink> private::Sealed
+    for BidiCallBuilder<'a, C, ReqStream, Res, ResSink>
+{
+}
+impl<'a, C, ReqStream, Res, ResSink> CallArgs for BidiCallBuilder<'a, C, ReqStream, Res, ResSink> {
     fn args_mut(&mut self) -> &mut Args {
         &mut self.args
     }

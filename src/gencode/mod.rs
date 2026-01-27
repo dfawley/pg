@@ -6,6 +6,7 @@ pub mod server;
 pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/protobuf_generated/generated.rs"));
 }
+use futures::Sink;
 use futures_core::Stream;
 use pb::*;
 use protobuf::AsView;
@@ -32,17 +33,20 @@ impl<C: Call> MyServiceClientStub<C> {
         UnaryCallBuilder::new(&self.channel, "/test.MyService/UnaryCall".to_string(), req)
     }
 
-    pub fn streaming_call<ReqStream>(
+    pub fn streaming_call<ReqStream, ResSink>(
         &self,
         req_stream: ReqStream,
-    ) -> BidiCallBuilder<'_, &C, ReqStream, MyResponse>
+        res_sink: ResSink,
+    ) -> BidiCallBuilder<'_, &C, ReqStream, MyResponse, ResSink>
     where
         ReqStream: Unpin + Stream<Item = MyRequest> + Send,
+        ResSink: Sink<MyResponse> + Send,
     {
         BidiCallBuilder::new(
             &self.channel,
             "/test.MyService/StreamingCall".to_string(),
             req_stream,
+            res_sink,
         )
     }
 }

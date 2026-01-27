@@ -4,7 +4,7 @@ mod grpc_protobuf;
 mod server;
 
 use async_stream::stream;
-use futures_util::StreamExt as _;
+use futures::sink::unfold;
 use protobuf::proto;
 use std::time::Duration;
 
@@ -108,13 +108,14 @@ async fn bidi(client: &MyServiceClientStub<impl Call>) {
             yield proto!(MyRequest { query: 10 });
             yield proto!(MyRequest { query: 20 });
         });
-        let mut res = client.streaming_call(requests).await;
-        let mut saw_err = false;
-        while let Some(res) = res.next().await {
-            saw_err |= res.is_err();
-            println!("stream: {:?}", res.map(|r| r.result()));
-        }
-        if !saw_err {
+        let responses = Box::pin(unfold((), |_, res: MyResponse| async move {
+            println!("stream: {:?}", res.result());
+            Ok::<_, ()>(())
+        }));
+        let status = client.streaming_call(requests, responses).await;
+        if let Err(status) = status {
+            println!("stream error: {:?}", status);
+        } else {
             println!("stream terminated successfully")
         }
     }

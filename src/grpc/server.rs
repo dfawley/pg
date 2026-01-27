@@ -17,8 +17,8 @@ pub trait Handle: Send + Sync {
         &self,
         _method: String,
         _headers: Headers,
-        tx: impl ServerSendStream + Send,
-        rx: impl ServerRecvStream + Send,
+        tx: impl ServerSendStream,
+        rx: impl ServerRecvStream,
     );
 }
 

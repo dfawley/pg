@@ -1,18 +1,13 @@
 use std::{
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
 };
 
 use async_stream::stream;
-use futures::{FutureExt, future::join, sink::unfold};
 use futures_core::Stream;
 use futures_sink::Sink;
-use protobuf::{AsMut, AsView, Message, MessageMut, MessageView, MutProxied, Proxied, Serialize};
-use tokio::{
-    select,
-    sync::{Mutex, mpsc},
-};
+use protobuf::{AsMut, AsView, Message, MessageMut, MessageView, MutProxied, Proxied};
+use tokio::{select, sync::mpsc};
 use tokio_util::sync::PollSender;
 
 use crate::{
@@ -59,8 +54,8 @@ impl<T: UnaryHandler> Handle for T {
         &self,
         _method: String,
         _headers: Headers,
-        mut tx: impl ServerSendStream + Send,
-        mut rx: impl ServerRecvStream + Send,
+        mut tx: impl ServerSendStream,
+        mut rx: impl ServerRecvStream,
     ) -> impl Future<Output = ()> + Send {
         ForceSend(async move {
             let mut req = T::Req::default();
@@ -139,8 +134,8 @@ impl<B: BidiHandler> Handle for BidiHandle<B> {
         &self,
         _method: String,
         _headers: Headers,
-        mut tx: impl ServerSendStream + Send,
-        mut rx: impl ServerRecvStream + Send,
+        mut tx: impl ServerSendStream,
+        mut rx: impl ServerRecvStream,
     ) -> impl Future<Output = ()> + Send {
         async move {
             let request_stream = stream! {
@@ -166,7 +161,7 @@ impl<B: BidiHandler> Handle for BidiHandle<B> {
                     result = &mut handler_fut => {
                         if let Some(mut rx) = channel_rx {
                             while let Ok(msg) = rx.try_recv() {
-                                tx.send(ResponseStreamItem::Message(&ProtoSendMessage::from_view(&msg.as_view()))).await;
+                                tx.send(ResponseStreamItem::Message(&ProtoSendMessage::from_view(&msg.as_view()) as &dyn SendMessage)).await;
                             }
                         }
 

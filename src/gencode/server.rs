@@ -15,8 +15,8 @@ use super::pb::*;
 pub trait MyService: Send + Sync + 'static {
     async fn unary_call(
         &self,
-        req: MyRequestView<'_>,
-        res: MyResponseMut<'_>,
+        _req: MyRequestView<'_>,
+        _res: MyResponseMut<'_>,
     ) -> Result<(), ServerStatus> {
         ready(Err(ServerStatus(Status {
             code: 12,
@@ -26,8 +26,8 @@ pub trait MyService: Send + Sync + 'static {
 
     async fn streaming_call(
         &self,
-        requests: impl Stream<Item = MyRequest> + Send,
-        responses: impl Sink<MyResponse> + Send,
+        _requests: impl Stream<Item = MyRequest> + Send,
+        _responses: impl Sink<MyResponse> + Send,
     ) -> Result<(), ServerStatus> {
         ready(Err(ServerStatus(Status {
             code: 12,

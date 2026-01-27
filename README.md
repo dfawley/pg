@@ -91,25 +91,26 @@ let mut reusable_response = MyResponse::default();
 let status = client.unary_call(proto!(MyRequest { page: 1 })
     .with_response_message(&mut reusable_response)
     .await;
-// The response is deserialized directly into your buffer if status.ok().
+// The response is deserialized directly into reusable_response if status.ok().
 ```
 
 ## Server Streaming
 
-Server streaming methods return a type that implements `futures_core::Stream`.
-You can iterate over it using loops or functional combinators in `StreamExt`.
+Server streaming methods accept a `futures::Sink` for responses, and they return
+a future that resolves to the status of the RPC.
 
 ```rust
-use futures_util::StreamExt;
+let response_sink = Box::pin(unfold((), |_, res: MyResponse| async move {
+    println!("Response: {:?}", res);
+    Ok::<_, ()>(())
+}));
 
-let mut stream = client.server_streaming(proto!(MyRequest { ... })).await;
+let response = client.server_streaming(
+        proto!(MyRequest { ... }),
+        response_sink,
+    ).await;
 
-while let Some(result) = stream.next().await {
-    match result {
-        Ok(msg) => println!("Received message: {:?}", msg),
-        Err(status) => eprintln!("Stream error: {:?}", status),
-    }
-}
+println!("Response: {:?}", response);  // Either Ok(MyResponse) or Err(StatusError)
 ```
 
 ## Client Streaming
@@ -135,7 +136,7 @@ println!("Response: {:?}", response);  // Either Ok(MyResponse) or Err(StatusErr
 ## Bidirectional Streaming
 
 Bidi streaming combines the patterns above. You provide an input stream and
-receive an output stream. These operate concurrently.
+output sink when performing the call. These operate concurrently.
 
 ```rust
 // Create a stream of requests
@@ -144,9 +145,10 @@ let request_stream = Box::pin(stream! {
     yield proto!(MyRequest { page: 2 });
 });
 
-let mut response_stream = client.bidi_streaming(request_stream).await;
+let response_sink = Box::pin(unfold((), |_, res: MyResponse| async move {
+    println!("Response: {:?}", res);
+    Ok::<_, ()>(())
+}));
 
-while let Some(response) = response_stream.next().await {
-    println!("Received message: {:?}", response?);
-}
+let status = client.bidi_streaming(request_stream, response_sink).await;
 ```
