@@ -5,7 +5,7 @@ use futures::Sink;
 use futures_core::Stream;
 use protobuf::{MutProxied, Proxied};
 
-use crate::grpc::{Server, ServerStatus, Status};
+use crate::grpc::{RegisterOn, Server, ServerStatus, Status};
 use crate::grpc_protobuf::{BidiHandle, BidiHandler, UnaryHandler};
 use crate::{register_bidi, register_unary};
 
@@ -36,6 +36,28 @@ pub trait MyService: Send + Sync + 'static {
     }
 }
 
+impl<T: MyService> RegisterOn for T {
+    fn register_on(self, server: &mut Server) {
+        let service = Arc::new(self);
+        register_unary!(
+            server,
+            "/test.MyService/UnaryCall",
+            service,
+            unary_call,
+            MyRequest,
+            MyResponse
+        );
+        register_bidi!(
+            server,
+            "/test.MyService/StreamingCall",
+            service,
+            streaming_call,
+            MyRequest,
+            MyResponse
+        );
+    }
+}
+/* OR
 pub fn register_my_service(server: &mut Server, service: impl MyService) {
     let service = Arc::new(service);
     register_unary!(
@@ -55,3 +77,4 @@ pub fn register_my_service(server: &mut Server, service: impl MyService) {
         MyResponse
     );
 }
+*/

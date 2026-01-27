@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use gencode::MyServiceClientStub;
 use gencode::pb::*;
-use gencode::server::register_my_service;
 use grpc::Call;
 use grpc::CallExt as _;
 use grpc::Channel;
@@ -23,10 +22,15 @@ use server::MyServiceImpl;
 use header_reader::*;
 use interceptor::*;
 
+use crate::grpc::RegisterOn;
+
 #[tokio::main]
 async fn main() {
     let mut server = Server::default();
-    register_my_service(&mut server, MyServiceImpl {});
+    MyServiceImpl {}.register_on(&mut server);
+    // OR
+    // register_my_service(&mut server, MyServiceImpl {});
+
     let channel = Channel { server };
     let client = MyServiceClientStub::new(channel.clone());
     unary(&client).await;

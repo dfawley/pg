@@ -104,6 +104,13 @@ impl Register for Server {
     }
 }
 
+/// A convenience trait that services may implement to register themselves on a
+/// server.
+pub trait RegisterOn {
+    /// Registers the service that implements this trait on server.
+    fn register_on(self, server: &mut Server);
+}
+
 #[async_trait]
 pub(super) trait GrpcHandle: Send + Sync {
     async fn grpc_handle(

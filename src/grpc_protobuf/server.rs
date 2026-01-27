@@ -142,7 +142,7 @@ impl<B: BidiHandler> Handle for BidiHandle<B> {
                 loop {
                     let mut req = B::Req::default();
                     {
-                         let mut wrapper = &mut ProtoRecvMessage::from_mut(&mut req);
+                         let wrapper = &mut ProtoRecvMessage::from_mut(&mut req);
                          if rx.next(wrapper).await.is_err() {
                              return;
                          }
