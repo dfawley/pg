@@ -113,11 +113,7 @@ async fn bidi(client: &MyServiceClientStub<impl Call>) {
             Ok::<_, ()>(())
         }));
         let status = client.streaming_call(requests, responses).await;
-        if let Err(status) = status {
-            println!("stream error: {:?}", status);
-        } else {
-            println!("stream terminated successfully")
-        }
+        println!("stream status: {:?}", status);
     }
     println!();
 }

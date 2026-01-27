@@ -130,8 +130,6 @@ impl<'a, C, ReqStream, Res, ResSink> BidiCallBuilder<'a, C, ReqStream, Res, ResS
     }
 }
 
-pub type ResponseStream<'a, Res> = Pin<Box<dyn Stream<Item = Result<Res, Status>> + Send + 'a>>;
-
 impl<'a, C, ReqStream, Res, ResSink> IntoFuture for BidiCallBuilder<'a, C, ReqStream, Res, ResSink>
 where
     // We can make one call on C.
@@ -148,7 +146,7 @@ where
     Res: Message + ClearAndParse + 'static,
     for<'b> Res::Mut<'b>: ClearAndParse + Send,
 {
-    type Output = Result<(), Status>;
+    type Output = Status;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(mut self) -> Self::IntoFuture {
@@ -185,12 +183,7 @@ where
 
             // Filter out None values and propagate the status only.
             let status = select(sender, receiver).filter_map(|item| async move { item });
-            let status = pin!(status).next().await.unwrap();
-            if status.code == 0 {
-                Ok(())
-            } else {
-                Err(status)
-            }
+            pin!(status).next().await.unwrap()
         })
     }
 }
