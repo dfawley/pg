@@ -5,26 +5,22 @@ use protobuf::proto;
 
 use crate::{
     gencode::{pb::*, server::MyService},
-    grpc::ServerStatus,
+    grpc::{ServerStatus, Status},
 };
 
 pub struct MyServiceImpl {}
 
 impl MyService for MyServiceImpl {
-    async fn unary_call(
-        &self,
-        req: MyRequestView<'_>,
-        mut res: MyResponseMut<'_>,
-    ) -> Result<(), ServerStatus> {
+    async fn unary_call(&self, req: MyRequestView<'_>, mut res: MyResponseMut<'_>) -> ServerStatus {
         res.set_result(req.query());
-        Ok(())
+        ServerStatus(Status::ok())
     }
 
     async fn streaming_call(
         &self,
         requests: impl Stream<Item = MyRequest> + Send,
         responses: impl Sink<MyResponse> + Send,
-    ) -> Result<(), ServerStatus> {
+    ) -> ServerStatus {
         let mut requests = pin!(requests);
         let receive = async move {
             while let Some(req) = requests.next().await {
@@ -50,6 +46,6 @@ impl MyService for MyServiceImpl {
             let _ = responses.send(proto!(MyResponse { result: 56 })).await;
         };
         tokio::join!(send, receive);
-        Ok(())
+        ServerStatus(Status::ok())
     }
 }

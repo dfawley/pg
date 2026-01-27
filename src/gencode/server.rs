@@ -13,26 +13,22 @@ use super::pb::*;
 
 #[trait_variant::make(Send)]
 pub trait MyService: Send + Sync + 'static {
-    async fn unary_call(
-        &self,
-        _req: MyRequestView<'_>,
-        _res: MyResponseMut<'_>,
-    ) -> Result<(), ServerStatus> {
-        ready(Err(ServerStatus(Status {
+    async fn unary_call(&self, _req: MyRequestView<'_>, _res: MyResponseMut<'_>) -> ServerStatus {
+        ready(ServerStatus(Status {
             code: 12,
             _msg: "unary_call not implemented".to_string(),
-        })))
+        }))
     }
 
     async fn streaming_call(
         &self,
         _requests: impl Stream<Item = MyRequest> + Send,
         _responses: impl Sink<MyResponse> + Send,
-    ) -> Result<(), ServerStatus> {
-        ready(Err(ServerStatus(Status {
+    ) -> ServerStatus {
+        ready(ServerStatus(Status {
             code: 12,
             _msg: "streaming_call not implemented".to_string(),
-        })))
+        }))
     }
 }
 

@@ -30,7 +30,7 @@ where
         &self,
         req: <Self::Req as Proxied>::View<'_>,
         res: <Self::Res as MutProxied>::Mut<'_>,
-    ) -> impl Future<Output = Result<(), ServerStatus>> + Send;
+    ) -> impl Future<Output = ServerStatus> + Send;
 }
 
 struct ForceSend<F>(F);
@@ -63,8 +63,8 @@ impl<T: UnaryHandler> Handle for T {
                 .await
                 .unwrap();
             let mut res = T::Res::default();
-            let status = self.unary(req.as_view(), res.as_mut()).await;
-            if let Err(ServerStatus(status)) = status {
+            let ServerStatus(status) = self.unary(req.as_view(), res.as_mut()).await;
+            if status.code != 0 {
                 tx.send(ResponseStreamItem::Trailers(Trailers { status }))
                     .await;
                 return;
@@ -104,7 +104,7 @@ macro_rules! register_unary {
                 &self,
                 req: <Self::Req as Proxied>::View<'_>,
                 res: <Self::Res as MutProxied>::Mut<'_>,
-            ) -> Result<(), ServerStatus> {
+            ) -> ServerStatus {
                 self.0.$method(req, res).await
             }
         }
@@ -124,7 +124,7 @@ where
         &self,
         req_stream: impl Stream<Item = Self::Req> + Send,
         res: impl Sink<Self::Res> + Send,
-    ) -> impl Future<Output = Result<(), ServerStatus>> + Send;
+    ) -> impl Future<Output = ServerStatus> + Send;
 }
 
 pub struct BidiHandle<B>(pub B);
@@ -157,17 +157,13 @@ impl<B: BidiHandler> Handle for BidiHandle<B> {
 
         let status = loop {
             select! {
-                result = &mut handler_fut => {
+                ServerStatus(status) = &mut handler_fut => {
+                    // When the handler future exits, drain the handler's sink.
                     if let Some(mut rx) = channel_rx {
                         while let Ok(msg) = rx.try_recv() {
                             tx.send(ResponseStreamItem::Message(&ProtoSendMessage::from_view(&msg.as_view()) as &dyn SendMessage)).await;
                         }
                     }
-
-                    let status = match result {
-                        Ok(()) => Status::ok(),
-                        Err(ss) => ss.0,
-                    };
                     break status;
                 }
 
@@ -215,7 +211,7 @@ macro_rules! register_bidi {
                 &self,
                 req_stream: impl Stream<Item = Self::Req> + Send,
                 res: impl Sink<Self::Res> + Send,
-            ) -> Result<(), ServerStatus> {
+            ) -> ServerStatus {
                 self.0.$method(req_stream, res).await
             }
         }
