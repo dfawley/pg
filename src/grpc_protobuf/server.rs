@@ -130,65 +130,63 @@ where
 pub struct BidiHandle<B>(pub B);
 
 impl<B: BidiHandler> Handle for BidiHandle<B> {
-    fn handle(
+    async fn handle(
         &self,
         _method: String,
         _headers: Headers,
         mut tx: impl ServerSendStream,
         mut rx: impl ServerRecvStream,
-    ) -> impl Future<Output = ()> + Send {
-        async move {
-            let request_stream = stream! {
-                loop {
-                    let mut req = B::Req::default();
-                    {
-                         let wrapper = &mut ProtoRecvMessage::from_mut(&mut req);
-                         if rx.next(wrapper).await.is_err() {
-                             return;
-                         }
-                    }
-                    yield req;
+    ) {
+        let request_stream = stream! {
+            loop {
+                let mut req = B::Req::default();
+                {
+                     let wrapper = &mut ProtoRecvMessage::from_mut(&mut req);
+                     if rx.next(wrapper).await.is_err() {
+                         return;
+                     }
                 }
-            };
+                yield req;
+            }
+        };
 
-            let (user_tx, rx_inner) = mpsc::channel::<B::Res>(1);
-            let mut channel_rx = Some(rx_inner);
-            let user_sink = PollSender::new(user_tx);
-            let mut handler_fut = Box::pin(self.0.stream(request_stream, user_sink));
+        let (user_tx, rx_inner) = mpsc::channel::<B::Res>(1);
+        let mut channel_rx = Some(rx_inner);
+        let user_sink = PollSender::new(user_tx);
+        let mut handler_fut = Box::pin(self.0.stream(request_stream, user_sink));
 
-            let status = loop {
-                select! {
-                    result = &mut handler_fut => {
-                        if let Some(mut rx) = channel_rx {
-                            while let Ok(msg) = rx.try_recv() {
-                                tx.send(ResponseStreamItem::Message(&ProtoSendMessage::from_view(&msg.as_view()) as &dyn SendMessage)).await;
-                            }
+        let status = loop {
+            select! {
+                result = &mut handler_fut => {
+                    if let Some(mut rx) = channel_rx {
+                        while let Ok(msg) = rx.try_recv() {
+                            tx.send(ResponseStreamItem::Message(&ProtoSendMessage::from_view(&msg.as_view()) as &dyn SendMessage)).await;
                         }
-
-                        let status = match result {
-                            Ok(()) => Status::ok(),
-                            Err(ss) => ss.0,
-                        };
-                        break status;
                     }
 
-                    maybe_msg =
-                        channel_rx.as_mut().expect("guard").recv()
-                    , if channel_rx.is_some() => {
-                        match maybe_msg {
-                            Some(msg) => {
-                                tx.send(ResponseStreamItem::Message(&ProtoSendMessage::from_view(&msg.as_view()))).await;
-                            }
-                            None => {
-                                channel_rx = None;
-                            }
+                    let status = match result {
+                        Ok(()) => Status::ok(),
+                        Err(ss) => ss.0,
+                    };
+                    break status;
+                }
+
+                maybe_msg =
+                    channel_rx.as_mut().expect("guard").recv()
+                , if channel_rx.is_some() => {
+                    match maybe_msg {
+                        Some(msg) => {
+                            tx.send(ResponseStreamItem::Message(&ProtoSendMessage::from_view(&msg.as_view()))).await;
+                        }
+                        None => {
+                            channel_rx = None;
                         }
                     }
                 }
-            };
-            tx.send(ResponseStreamItem::Trailers(Trailers { status }))
-                .await;
-        }
+            }
+        };
+        tx.send(ResponseStreamItem::Trailers(Trailers { status }))
+            .await;
     }
 }
 
