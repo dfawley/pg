@@ -32,8 +32,8 @@ pub trait ServerSendStream {
     async fn send(&mut self, item: ServerResponseStreamItem);
 }
 
-pub trait Register {
-    fn register(&mut self, path: impl ToString, handler: impl Handle + 'static);
+pub trait RegisterMethod {
+    fn register_method(&mut self, path: impl ToString, handler: impl Handle + 'static);
 }
 
 #[derive(Clone, Default)]
@@ -95,8 +95,14 @@ impl ServerRecvStream for GrpcServerRecvStream {
     }
 }
 
-impl Register for Server {
-    fn register(&mut self, path: impl ToString, handler: impl Handle + 'static) {
+impl Server {
+    pub fn register(&mut self, service: impl RegisterOn) {
+        service.register_on(self);
+    }
+}
+
+impl RegisterMethod for Server {
+    fn register_method(&mut self, path: impl ToString, handler: impl Handle + 'static) {
         self.handlers
             .lock()
             .unwrap()

@@ -27,9 +27,7 @@ use crate::grpc::RegisterOn;
 #[tokio::main]
 async fn main() {
     let mut server = Server::default();
-    MyServiceImpl {}.register_on(&mut server);
-    // OR
-    // register_my_service(&mut server, MyServiceImpl {});
+    server.register(MyServiceImpl {});
 
     let channel = Channel { server };
     let client = MyServiceClientStub::new(channel.clone());

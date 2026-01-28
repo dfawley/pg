@@ -108,7 +108,7 @@ macro_rules! register_unary {
                 self.0.$method(req, res).await
             }
         }
-        crate::grpc::Register::register($server, $path, MethodShim($service.clone()));
+        crate::grpc::RegisterMethod::register_method($server, $path, MethodShim($service.clone()));
     }};
 }
 
@@ -215,6 +215,10 @@ macro_rules! register_bidi {
                 self.0.$method(req_stream, res).await
             }
         }
-        crate::grpc::Register::register($server, $path, BidiHandle(MethodShim($service.clone())));
+        crate::grpc::RegisterMethod::register_method(
+            $server,
+            $path,
+            BidiHandle(MethodShim($service.clone())),
+        );
     }};
 }
