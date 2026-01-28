@@ -13,12 +13,12 @@ pub struct ServerStatus(pub Status);
 
 #[trait_variant::make(Send)]
 pub trait Handle: Send + Sync {
-    async fn handle(
-        &self,
+    async fn handle<'a>(
+        &'a self,
         _method: String,
         _headers: Headers,
-        tx: impl ServerSendStream,
-        rx: impl ServerRecvStream,
+        tx: impl ServerSendStream + 'a,
+        rx: impl ServerRecvStream + 'a,
     );
 }
 

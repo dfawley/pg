@@ -16,10 +16,10 @@ impl MyService for MyServiceImpl {
         ServerStatus(Status::ok())
     }
 
-    async fn streaming_call(
-        &self,
-        requests: impl Stream<Item = MyRequest> + Send,
-        responses: impl Sink<MyResponse> + Send,
+    async fn streaming_call<'a>(
+        &'a self,
+        requests: impl Stream<Item = MyRequest> + Send + 'a,
+        responses: impl Sink<MyResponse> + Send + 'a,
     ) -> ServerStatus {
         let mut requests = pin!(requests);
         let receive = async move {

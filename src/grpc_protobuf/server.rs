@@ -12,8 +12,8 @@ use tokio_util::sync::PollSender;
 
 use crate::{
     grpc::{
-        Handle, Headers, ResponseStreamItem, SendMessage, ServerRecvStream, ServerSendStream,
-        ServerStatus, Status, Trailers,
+        Handle, Headers, ResponseStreamItem, ServerRecvStream, ServerSendStream, ServerStatus,
+        Status, Trailers,
     },
     grpc_protobuf::{ProtoRecvMessage, ProtoSendMessage},
 };
@@ -50,12 +50,12 @@ unsafe impl<F> Send for ForceSend<F> {}
 unsafe impl<F> Sync for ForceSend<F> {}
 
 impl<T: UnaryHandler> Handle for T {
-    fn handle(
-        &self,
+    fn handle<'a>(
+        &'a self,
         _method: String,
         _headers: Headers,
-        mut tx: impl ServerSendStream,
-        mut rx: impl ServerRecvStream,
+        mut tx: impl ServerSendStream + 'a,
+        mut rx: impl ServerRecvStream + 'a,
     ) -> impl Future<Output = ()> + Send {
         ForceSend(async move {
             let mut req = T::Req::default();
@@ -120,22 +120,22 @@ where
 {
     type Req: Message + Send + Sync + 'static;
     type Res: Message + Proxied + Send + Sync + 'static;
-    fn stream(
-        &self,
-        req_stream: impl Stream<Item = Self::Req> + Send,
-        res: impl Sink<Self::Res> + Send,
-    ) -> impl Future<Output = ServerStatus> + Send;
+    fn stream<'a>(
+        &'a self,
+        req_stream: impl Stream<Item = Self::Req> + Send + 'a,
+        res: impl Sink<Self::Res> + Send + 'a,
+    ) -> impl Future<Output = ServerStatus> + Send + 'a;
 }
 
 pub struct BidiHandle<B>(pub B);
 
 impl<B: BidiHandler> Handle for BidiHandle<B> {
-    async fn handle(
-        &self,
+    async fn handle<'a>(
+        &'a self,
         _method: String,
         _headers: Headers,
-        mut tx: impl ServerSendStream,
-        mut rx: impl ServerRecvStream,
+        mut tx: impl ServerSendStream + 'a,
+        mut rx: impl ServerRecvStream + 'a,
     ) {
         let request_stream = stream! {
             loop {
@@ -150,37 +150,38 @@ impl<B: BidiHandler> Handle for BidiHandle<B> {
             }
         };
 
-        let (user_tx, rx_inner) = mpsc::channel::<B::Res>(1);
-        let mut channel_rx = Some(rx_inner);
-        let user_sink = PollSender::new(user_tx);
+        let (sink_tx, sink_rx) = mpsc::channel::<B::Res>(1);
+        let mut sink_rx = Some(sink_rx);
+        let user_sink = PollSender::new(sink_tx);
         let mut handler_fut = Box::pin(self.0.stream(request_stream, user_sink));
 
         let status = loop {
             select! {
                 ServerStatus(status) = &mut handler_fut => {
-                    // When the handler future exits, drain the handler's sink.
-                    if let Some(mut rx) = channel_rx {
-                        while let Ok(msg) = rx.try_recv() {
-                            tx.send(ResponseStreamItem::Message(&ProtoSendMessage::from_view(&msg.as_view()) as &dyn SendMessage)).await;
-                        }
-                    }
                     break status;
                 }
 
                 maybe_msg =
-                    channel_rx.as_mut().expect("guard").recv()
-                , if channel_rx.is_some() => {
-                    match maybe_msg {
-                        Some(msg) => {
-                            tx.send(ResponseStreamItem::Message(&ProtoSendMessage::from_view(&msg.as_view()))).await;
-                        }
-                        None => {
-                            channel_rx = None;
-                        }
+                    sink_rx.as_mut().expect("guard").recv(), if sink_rx.is_some() => {
+                    if let Some(msg) = maybe_msg {
+                        tx.send(ResponseStreamItem::Message(
+                            &ProtoSendMessage::<B::Res>::from_view(&msg.as_view())),
+                        ).await;
+                    } else {
+                        sink_rx = None;
                     }
                 }
             }
         };
+        // When the handler future exits, drain the handler's sink.
+        if let Some(mut rx) = sink_rx {
+            while let Some(msg) = rx.recv().await {
+                tx.send(ResponseStreamItem::Message(
+                    &ProtoSendMessage::<B::Res>::from_view(&msg.as_view()),
+                ))
+                .await;
+            }
+        }
         tx.send(ResponseStreamItem::Trailers(Trailers { status }))
             .await;
     }
@@ -207,10 +208,10 @@ macro_rules! register_bidi {
             type Req = $Req;
             type Res = $Res;
 
-            async fn stream(
-                &self,
-                req_stream: impl Stream<Item = Self::Req> + Send,
-                res: impl Sink<Self::Res> + Send,
+            async fn stream<'a>(
+                &'a self,
+                req_stream: impl Stream<Item = Self::Req> + Send + 'a,
+                res: impl Sink<Self::Res> + Send + 'a,
             ) -> ServerStatus {
                 self.0.$method(req_stream, res).await
             }

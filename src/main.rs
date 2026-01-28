@@ -22,8 +22,6 @@ use server::MyServiceImpl;
 use header_reader::*;
 use interceptor::*;
 
-use crate::grpc::RegisterOn;
-
 #[tokio::main]
 async fn main() {
     let mut server = Server::default();

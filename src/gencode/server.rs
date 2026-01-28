@@ -20,10 +20,10 @@ pub trait MyService: Send + Sync + 'static {
         }))
     }
 
-    async fn streaming_call(
-        &self,
-        _requests: impl Stream<Item = MyRequest> + Send,
-        _responses: impl Sink<MyResponse> + Send,
+    async fn streaming_call<'a>(
+        &'a self,
+        _requests: impl Stream<Item = MyRequest> + Send + 'a,
+        _responses: impl Sink<MyResponse> + Send + 'a,
     ) -> ServerStatus {
         ready(ServerStatus(Status {
             code: 12,
