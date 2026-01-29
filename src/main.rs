@@ -3,8 +3,6 @@ mod grpc;
 mod grpc_protobuf;
 mod server;
 
-use async_stream::stream;
-use futures::sink::unfold;
 use protobuf::proto;
 use std::time::Duration;
 
@@ -102,18 +100,36 @@ async fn unary(client: &MyServiceClientStub<impl Call>) {
     println!();
 }
 
+use futures::SinkExt;
+use std::pin::pin;
 async fn bidi(client: &MyServiceClientStub<impl Call>) {
     {
-        let requests = Box::pin(stream! {
-            yield proto!(MyRequest { query: 10 });
-            yield proto!(MyRequest { query: 20 });
-        });
-        let responses = Box::pin(unfold((), |_, res: MyResponse| async move {
-            println!("stream: {:?}", res.result());
-            Ok::<_, ()>(())
-        }));
-        let status = client.streaming_call(requests, responses).await;
-        println!("stream status: {:?}", status);
+        let (tx, mut rx) = client.streaming_call().start();
+        let requests = async move {
+            let mut tx = pin!(tx);
+            if tx.send(proto!(MyRequest { query: 10 })).await.is_err() {
+                return;
+            }
+            let _ = tx.send(proto!(MyRequest { query: 20 })).await;
+        };
+        let responses = async move {
+            while let Some(res) = rx.next().await {
+                println!("stream: {:?}", res.result());
+            }
+            println!("stream status: {:?}", rx.status().await);
+        };
+        // Perform sends and receives concurrently.
+        //
+        // Note that the danger in doing it serially:
+        //
+        // tx.send().await;
+        // tx.send().await; ... x 100
+        // rx.next().await; ...
+        //
+        // is that the send stream could become blocked.  If the server is
+        // also attempting to send a hundred responses before reading the
+        // first request, that would result in a deadlock.
+        tokio::join!(requests, responses);
     }
     println!();
 }

@@ -1,17 +1,16 @@
-use async_stream::stream;
-use futures::{Sink, SinkExt as _};
-use futures_core::Stream;
-use futures_util::{StreamExt as _, stream::select};
+use futures::Sink;
+use futures::sink::unfold;
 use protobuf::{
-    AsMut, AsView, ClearAndParse, Message, MessageView, MutProxied, Proxied, Serialize,
+    AsMut, AsView, ClearAndParse, Message, MessageMut, MessageView, MutProxied, Proxied, Serialize,
 };
-use std::pin::{Pin, pin};
+use std::pin::Pin;
 use std::time::Duration;
 use std::{any::TypeId, marker::PhantomData};
 
 use crate::grpc::{
-    Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, ClientRecvStream, ClientSendStream,
-    MessageType, RecvMessage, RecvStreamValidator, ResponseStreamItem, SendMessage, Status,
+    Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, ClientRecvStream,
+    ClientResponseStreamItem, ClientSendStream, MessageType, RecvMessage, RecvStreamValidator,
+    ResponseStreamItem, SendMessage, Status,
 };
 
 mod server;
@@ -108,85 +107,113 @@ where
     }
 }
 
-pub struct BidiCallBuilder<'a, C, ReqStream, Res, ResSink> {
-    channel: C,
-    method: String,
-    req_stream: ReqStream,
-    res_sink: ResSink,
-    args: Args,
-    _phantom: &'a PhantomData<Res>,
+pub struct GrpcStreamingResponse<M, Rx, Res> {
+    rx: RecvStreamValidator<Rx>,
+    status: Option<Status>,
+    _phantom: PhantomData<(M, Res)>,
 }
 
-impl<'a, C, ReqStream, Res, ResSink> BidiCallBuilder<'a, C, ReqStream, Res, ResSink> {
-    pub fn new(channel: C, method: String, req_stream: ReqStream, res_sink: ResSink) -> Self {
+impl<M, Rx, Res> GrpcStreamingResponse<M, Rx, Res>
+where
+    Rx: ClientRecvStream,
+    Res: Message,
+    for<'b> Res::Mut<'b>: MessageMut<'b>,
+{
+    fn new(rx: RecvStreamValidator<Rx>) -> Self {
         Self {
-            channel,
-            method,
-            req_stream,
-            res_sink,
-            args: Default::default(),
-            _phantom: &PhantomData,
+            rx,
+            status: None,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub async fn next(&mut self) -> Option<Res> {
+        let mut res = Res::default();
+        let mut res_view = ProtoRecvMessage::from_mut(&mut res);
+        loop {
+            let i = self.rx.next(&mut res_view).await;
+            match i {
+                ResponseStreamItem::Headers(_) => continue,
+                ResponseStreamItem::Message(_) => {
+                    drop(res_view);
+                    return Some(res);
+                }
+                ResponseStreamItem::Trailers(trailers) => {
+                    self.status = Some(trailers.status);
+                    return None;
+                }
+                ResponseStreamItem::StreamClosed => return None,
+            }
+        }
+    }
+
+    pub async fn status(mut self) -> Status {
+        if let Some(status) = self.status.take() {
+            // We encountered a status while handling a call to next.
+            status
+        } else {
+            // Drain the stream until we find trailers.
+            let mut nop_msg = NopRecvMessage;
+            loop {
+                let i = self.rx.next(&mut nop_msg).await;
+                if let ClientResponseStreamItem::Trailers(t) = i {
+                    return t.status;
+                }
+            }
         }
     }
 }
 
-impl<'a, C, ReqStream, Res, ResSink> IntoFuture for BidiCallBuilder<'a, C, ReqStream, Res, ResSink>
-where
-    // We can make one call on C.
-    C: CallOnce + 'a,
-    // ReqStream is a stream of proto messages. (Ideally we could just require
-    // "Item: Message" and protobuf would automatically include the rest.)
-    ReqStream: Unpin + Stream + Send + 'a,
-    ReqStream::Item: Message,
-    for<'b> <ReqStream::Item as Proxied>::View<'b>: MessageView<'b>,
-    // Res is a proto message. (Ideally we could just require "Message" and
-    // protobuf would automatically include the rest.)
-    ResSink: Unpin + Sink<Res> + Send + 'a,
-    ResSink::Error: Send,
-    Res: Message + ClearAndParse,
-    for<'b> Res::Mut<'b>: ClearAndParse + Send + Sync,
-{
-    type Output = Status;
-    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+struct NopRecvMessage;
 
-    fn into_future(mut self) -> Self::IntoFuture {
-        Box::pin(async move {
-            let (mut tx, rx) = self.channel.call_once(self.method, self.args);
+impl RecvMessage for NopRecvMessage {
+    fn decode(&mut self, _data: Vec<Vec<u8>>) {}
+}
 
-            // Create a stream for sending data.  Yields None after every
-            // message to cause the receiver stream to be polled.
-            let sender = stream! {
-                while let Some(req) = self.req_stream.next().await {
-                    if tx.send_msg(&ProtoSendMessage::from_view(&req)).await.is_err() {
-                        return;
-                    }
-                    yield None;
-                }
-            };
+pub struct BidiCallBuilder<C, Req, Res> {
+    channel: C,
+    method: String,
+    args: Args,
+    _phantom: PhantomData<(Req, Res)>,
+}
 
-            // Create a stream for receiving data.  Yields None or Some(trailers).
-            let receiver = stream! {
-                let mut rx = RecvStreamValidator::new(rx, false);
-                loop {
-                    let mut res = Res::default();
-                    let i = rx.next(&mut ProtoRecvMessage::from_mut(&mut res)).await;
-                    if let ResponseStreamItem::Message(_) = i {
-                        // TODO: If the sink errors, then what do we do?
-                        let _ = self.res_sink.send(res).await;
-                        yield None;
-                    } else if let ResponseStreamItem::Trailers(t) = i {
-                        yield Some(t.status);
-                        return;
-                    }
-                }
-            };
-
-            // Filter out None values and propagate the status only.
-            let status = select(sender, receiver).filter_map(|item| async move { item });
-            pin!(status).next().await.unwrap()
-        })
+impl<C, Req, Res> BidiCallBuilder<C, Req, Res> {
+    pub fn new(channel: C, method: String) -> Self {
+        Self {
+            channel,
+            method,
+            args: Default::default(),
+            _phantom: PhantomData,
+        }
     }
 }
+
+impl<C, Req, Res> BidiCallBuilder<C, Req, Res>
+where
+    // We can make one call on C.
+    C: CallOnce,
+    Req: Message,
+    for<'b> Req::View<'b>: MessageView<'b>,
+    Res: Message + ClearAndParse,
+    for<'b> Res::Mut<'b>: MessageMut<'b>,
+{
+    pub fn start(
+        self,
+    ) -> (
+        impl Sink<Req, Error = ()>,
+        GrpcStreamingResponse<Res, impl ClientRecvStream, Res>,
+    ) {
+        let (tx, rx) = self.channel.call_once(self.method, self.args);
+        let rx = RecvStreamValidator::new(rx, false);
+        let req_sink = unfold(tx, |mut tx, req| async move {
+            tx.send_msg(&ProtoSendMessage::from_view(&req)).await?;
+            Ok(tx)
+        });
+        let res_stream = GrpcStreamingResponse::new(rx);
+        (req_sink, res_stream)
+    }
+}
+
 mod private {
     pub(crate) trait Sealed {}
 }
@@ -202,11 +229,8 @@ impl<'a, C, Res, ReqMsg> CallArgs for UnaryCallBuilder<'a, C, Res, ReqMsg> {
     }
 }
 
-impl<'a, C, ReqStream, Res, ResSink> private::Sealed
-    for BidiCallBuilder<'a, C, ReqStream, Res, ResSink>
-{
-}
-impl<'a, C, ReqStream, Res, ResSink> CallArgs for BidiCallBuilder<'a, C, ReqStream, Res, ResSink> {
+impl<C, Req, Res> private::Sealed for BidiCallBuilder<C, Req, Res> {}
+impl<C, Req, Res> CallArgs for BidiCallBuilder<C, Req, Res> {
     fn args_mut(&mut self) -> &mut Args {
         &mut self.args
     }
