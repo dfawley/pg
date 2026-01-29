@@ -64,7 +64,7 @@ where
         Res: Message + 'static,
         for<'b> Res::Mut<'b>: ClearAndParse + Send,
     {
-        let (tx, rx) = self.channel.call_once(self.method, self.args).await;
+        let (tx, rx) = self.channel.call_once(self.method, self.args);
         let mut rx = RecvStreamValidator::new(rx, true);
         let req = &ProtoSendMessage::from_view(&self.req);
         tx.send_and_close(req).await;
@@ -151,7 +151,7 @@ where
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
-            let (mut tx, rx) = self.channel.call_once(self.method, self.args).await;
+            let (mut tx, rx) = self.channel.call_once(self.method, self.args);
 
             // Create a stream for sending data.  Yields None after every
             // message to cause the receiver stream to be polled.

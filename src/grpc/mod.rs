@@ -137,27 +137,19 @@ pub trait ClientRecvStream: Send {
 }
 
 /// Call begins the dispatching of an RPC.
-#[trait_variant::make(Send)]
 pub trait Call: Send + Sync {
     /// Starts a call, returning the send and receive streams to interact with
-    /// the RPC.  The returned future may block until sufficient resources are
-    /// available to allow the call to start.
-    async fn call(
-        &self,
-        method: String,
-        args: Args,
-    ) -> (impl ClientSendStream, impl ClientRecvStream);
+    /// the RPC.
+    fn call(&self, method: String, args: Args) -> (impl ClientSendStream, impl ClientRecvStream);
 }
 
 /// CallOnce is like Call, but consumes the receiver to limit it to a single
 /// call.  This is particularly relevant for pairing with CallInterceptorOnce
 /// usages.  It is blanket implemented on Call references.
-#[trait_variant::make(Send)]
 pub trait CallOnce: Send + Sync {
     /// Starts a call, returning the send and receive streams to interact with
-    /// the RPC.  The returned future may block until sufficient resources are
-    /// available to allow the call to start.
-    async fn call_once(
+    /// the RPC.
+    fn call_once(
         self,
         method: String,
         args: Args,
@@ -165,31 +157,26 @@ pub trait CallOnce: Send + Sync {
 }
 
 impl<C: Call> CallOnce for &C {
-    async fn call_once(
+    fn call_once(
         self,
         method: String,
         args: Args,
     ) -> (impl ClientSendStream, impl ClientRecvStream) {
-        <C as Call>::call(self, method, args).await
+        <C as Call>::call(self, method, args)
     }
 }
 
 impl<C: Call> Call for &C {
-    async fn call(
-        &self,
-        method: String,
-        args: Args,
-    ) -> (impl ClientSendStream, impl ClientRecvStream) {
-        <C as Call>::call(self, method, args).await
+    fn call(&self, method: String, args: Args) -> (impl ClientSendStream, impl ClientRecvStream) {
+        <C as Call>::call(self, method, args)
     }
 }
 
 /// CallInterceptor allows intercepting a call.
-#[trait_variant::make(Send)]
 pub trait CallInterceptor: Send + Sync {
     /// Starts a call.  Implementations should generally use next to create and
     /// start a call whose streams are optionally wrapped before being returned.
-    async fn call(
+    fn call(
         &self,
         method: String,
         args: Args,
@@ -198,9 +185,8 @@ pub trait CallInterceptor: Send + Sync {
 }
 
 /// CallInterceptorOnce allows intercepting a call one time only.
-#[trait_variant::make(Send)]
 pub trait CallInterceptorOnce: Send + Sync {
-    async fn call_once(
+    fn call_once(
         self,
         method: String,
         args: Args,

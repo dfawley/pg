@@ -160,9 +160,8 @@ impl<B: BidiHandler> Handle for BidiHandle<B> {
                 ServerStatus(status) = &mut handler_fut => {
                     break status;
                 }
-
                 maybe_msg =
-                    sink_rx.as_mut().expect("guard").recv(), if sink_rx.is_some() => {
+                    sink_rx.as_mut().unwrap().recv(), if sink_rx.is_some() => {
                     if let Some(msg) = maybe_msg {
                         tx.send(ResponseStreamItem::Message(
                             &ProtoSendMessage::<B::Res>::from_view(&msg.as_view())),

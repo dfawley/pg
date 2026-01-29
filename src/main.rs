@@ -152,13 +152,13 @@ mod header_reader {
     }
 
     impl CallInterceptorOnce for HeaderReader {
-        async fn call_once(
+        fn call_once(
             self,
             method: String,
             args: Args,
             next: impl CallOnce,
         ) -> (impl ClientSendStream, impl ClientRecvStream) {
-            let (tx, delegate) = next.call_once(method, args).await;
+            let (tx, delegate) = next.call_once(method, args);
             (
                 tx,
                 HeaderReaderRecvStream {
@@ -193,13 +193,13 @@ mod interceptor {
     pub struct FailStatusInterceptor {}
 
     impl CallInterceptor for FailStatusInterceptor {
-        async fn call(
+        fn call(
             &self,
             method: String,
             args: Args,
             next: &impl Call,
         ) -> (impl ClientSendStream, impl ClientRecvStream) {
-            let (tx, rx) = next.call(method, args).await;
+            let (tx, rx) = next.call(method, args);
             (tx, FailingRecvStreamInterceptor { delegate: rx })
         }
     }
@@ -222,13 +222,13 @@ mod interceptor {
     pub struct PrintReqInterceptor {}
 
     impl CallInterceptor for PrintReqInterceptor {
-        async fn call(
+        fn call(
             &self,
             method: String,
             args: Args,
             next: &impl Call,
         ) -> (impl ClientSendStream, impl ClientRecvStream) {
-            let (tx, rx) = next.call(method, args).await;
+            let (tx, rx) = next.call(method, args);
             (PrintReqSendStreamInterceptor { delegate: tx }, rx)
         }
     }

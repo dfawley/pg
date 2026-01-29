@@ -11,11 +11,7 @@ pub struct Channel {
 }
 
 impl Call for Channel {
-    async fn call(
-        &self,
-        method: String,
-        _args: Args,
-    ) -> (impl ClientSendStream, impl ClientRecvStream) {
+    fn call(&self, method: String, _args: Args) -> (impl ClientSendStream, impl ClientRecvStream) {
         let (tx1, rx1) = mpsc::channel(1);
         let (tx2, rx2) = mpsc::channel(1);
         let handler = self.server.handlers.lock().unwrap().get(&method).cloned();
@@ -31,14 +27,13 @@ impl Call for Channel {
                     .await;
             });
         } else {
-            let _ = tx2
-                .send(ResponseStreamItem::Trailers(Trailers {
-                    status: Status {
-                        code: 13,
-                        _msg: "method not registered on server".to_string(),
-                    },
-                }))
-                .await;
+            // (Can't block since there is a buffer of 1.)
+            let _ = tx2.blocking_send(ResponseStreamItem::Trailers(Trailers {
+                status: Status {
+                    code: 13,
+                    _msg: "method not registered on server".to_string(),
+                },
+            }));
         }
         (ChannelSendStream { tx: tx1 }, ChannelRecvStream { rx: rx2 })
     }
