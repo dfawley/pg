@@ -118,8 +118,8 @@ where
     for<'a> <Self::Req as MutProxied>::Mut<'a>: MessageMut<'a> + Send + Sync,
     for<'a> <Self::Res as Proxied>::View<'a>: MessageView<'a> + Send + Sync,
 {
-    type Req: Message + Send + Sync + 'static;
-    type Res: Message + Proxied + Send + Sync + 'static;
+    type Req: Message + Send + Sync;
+    type Res: Message + Proxied + Send + Sync;
     fn stream<'a>(
         &'a self,
         req_stream: impl Stream<Item = Self::Req> + Send + 'a,

@@ -57,12 +57,12 @@ where
         // ReqMsgView is a proto message view. (Ideally we could just require
         // "AsView" and protobuf would automatically include the rest.)
         ReqMsgView: AsView + Send + Sync + 'a,
-        <ReqMsgView as AsView>::Proxied: Message + 'static,
+        <ReqMsgView as AsView>::Proxied: Message,
         for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>: MessageView<'b>,
         // Res is a proto message. (Ideally we could just require "Message" and
         // protobuf would automatically include the rest.)
-        Res: Message + 'static,
-        for<'b> Res::Mut<'b>: ClearAndParse + Send,
+        Res: Message,
+        for<'b> Res::Mut<'b>: ClearAndParse + Send + Sync,
     {
         let (tx, rx) = self.channel.call_once(self.method, self.args);
         let mut rx = RecvStreamValidator::new(rx, true);
@@ -85,12 +85,12 @@ where
     // ReqMsgView is a proto message view. (Ideally we could just require
     // "AsView" and protobuf would automatically include the rest.)
     ReqMsgView: AsView + Send + Sync + 'a,
-    <ReqMsgView as AsView>::Proxied: Message + 'static,
+    <ReqMsgView as AsView>::Proxied: Message,
     for<'b> <<ReqMsgView as AsView>::Proxied as Proxied>::View<'b>: MessageView<'b>,
     // Res is a proto message. (Ideally we could just require "Message" and
     // protobuf would automatically include the rest.)
-    Res: Message + 'static,
-    for<'b> Res::Mut<'b>: ClearAndParse + Send,
+    Res: Message,
+    for<'b> Res::Mut<'b>: ClearAndParse + Send + Sync,
 {
     type Output = Result<Res, Status>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
@@ -137,14 +137,14 @@ where
     // ReqStream is a stream of proto messages. (Ideally we could just require
     // "Item: Message" and protobuf would automatically include the rest.)
     ReqStream: Unpin + Stream + Send + 'a,
-    ReqStream::Item: Message + 'static,
+    ReqStream::Item: Message,
     for<'b> <ReqStream::Item as Proxied>::View<'b>: MessageView<'b>,
     // Res is a proto message. (Ideally we could just require "Message" and
     // protobuf would automatically include the rest.)
     ResSink: Unpin + Sink<Res> + Send + 'a,
     ResSink::Error: Send,
-    Res: Message + ClearAndParse + 'static,
-    for<'b> Res::Mut<'b>: ClearAndParse + Send,
+    Res: Message + ClearAndParse,
+    for<'b> Res::Mut<'b>: ClearAndParse + Send + Sync,
 {
     type Output = Status;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
@@ -223,7 +223,7 @@ impl<T: CallArgs> SharedCall for T {
     }
 }
 
-pub struct ProtoSendMessage<'a, V: Proxied + 'static>(V::View<'a>);
+pub struct ProtoSendMessage<'a, V: Proxied>(V::View<'a>);
 
 impl<'a, V: Proxied> ProtoSendMessage<'a, V> {
     pub fn from_view(provider: &'a impl AsView<Proxied = V>) -> Self {
@@ -233,7 +233,7 @@ impl<'a, V: Proxied> ProtoSendMessage<'a, V> {
 
 impl<'a, V> SendMessage for ProtoSendMessage<'a, V>
 where
-    V: Proxied + 'static,
+    V: Proxied,
     V::View<'a>: Serialize + Send + Sync,
 {
     fn encode(&self) -> Vec<Vec<u8>> {
@@ -255,7 +255,7 @@ impl<'a, V: Proxied> MessageType for ProtoSendMessage<'a, V> {
     }
 }
 
-pub struct ProtoRecvMessage<'a, M: MutProxied + 'static>(M::Mut<'a>);
+pub struct ProtoRecvMessage<'a, M: MutProxied>(M::Mut<'a>);
 
 impl<'a, M: MutProxied> ProtoRecvMessage<'a, M> {
     pub fn from_mut(provider: &'a mut impl AsMut<MutProxied = M>) -> Self {
@@ -265,7 +265,7 @@ impl<'a, M: MutProxied> ProtoRecvMessage<'a, M> {
 
 impl<'a, M> RecvMessage for ProtoRecvMessage<'a, M>
 where
-    M: MutProxied + 'static,
+    M: MutProxied,
     M::Mut<'a>: Send + Sync + ClearAndParse,
 {
     fn decode(&mut self, data: Vec<Vec<u8>>) {
