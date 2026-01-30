@@ -7,17 +7,18 @@ pub use channel::*;
 mod server;
 pub use server::*;
 
+#[allow(unused)]
 #[derive(Clone, Debug)]
 pub struct Status {
     pub code: i32,
-    pub _msg: String,
+    pub msg: String,
 }
 
 impl Status {
     pub fn ok() -> Self {
         Status {
             code: 0,
-            _msg: String::new(),
+            msg: String::new(),
         }
     }
 }
@@ -84,17 +85,24 @@ impl dyn RecvMessage + '_ {
 }
 
 /// SendStream represents the sending side of a client stream.  Dropping the
-/// SendStream or calling send_and_close closes the send side of the stream.
+/// SendStream or passing opts.final_msg = true will close the sending side of
+/// the stream.
 #[trait_variant::make(Send)]
 pub trait ClientSendStream: Send {
     /// Sends msg on the stream.  If Err(()) is returned, the message could not
     /// be delivered because the stream was closed.  Future calls to SendStream
     /// will do nothing.
-    async fn send_msg(&mut self, msg: &dyn SendMessage) -> Result<(), ()>;
+    async fn send_msg(&mut self, msg: &dyn SendMessage, opts: SendMsgOptions) -> Result<(), ()>;
+}
 
-    /// Sends msg on the stream and indicates the client has no further messages
-    /// to send.
-    async fn send_and_close(self, msg: &dyn SendMessage);
+#[allow(unused)]
+#[derive(Default)]
+#[non_exhaustive]
+pub struct SendMsgOptions {
+    /// If set, the send stream will be closed upon sending this message.
+    pub final_msg: bool,
+    /// If set, compression will be disabled for this message.
+    pub disable_compression: bool,
 }
 
 /// ResponseStreamItem represents an item in a response stream (either server
@@ -229,7 +237,7 @@ where
         ResponseStreamItem::Trailers(Trailers {
             status: Status {
                 code: 13, // TODO: Internal? TBD
-                _msg: s.to_string(),
+                msg: s.to_string(),
             },
         })
     }

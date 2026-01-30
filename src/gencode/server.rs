@@ -16,7 +16,7 @@ pub trait MyService: Send + Sync + 'static {
     async fn unary_call(&self, _req: MyRequestView<'_>, _res: MyResponseMut<'_>) -> ServerStatus {
         ready(ServerStatus(Status {
             code: 12,
-            _msg: "unary_call not implemented".to_string(),
+            msg: "unary_call not implemented".to_string(),
         }))
     }
 
@@ -27,7 +27,7 @@ pub trait MyService: Send + Sync + 'static {
     ) -> ServerStatus {
         ready(ServerStatus(Status {
             code: 12,
-            _msg: "streaming_call not implemented".to_string(),
+            msg: "streaming_call not implemented".to_string(),
         }))
     }
 }

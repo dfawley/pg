@@ -10,7 +10,7 @@ use std::{any::TypeId, marker::PhantomData};
 use crate::grpc::{
     Args, CallInterceptorOnce, CallOnce, CallOnceExt as _, ClientRecvStream,
     ClientResponseStreamItem, ClientSendStream, MessageType, RecvMessage, RecvStreamValidator,
-    ResponseStreamItem, SendMessage, Status,
+    ResponseStreamItem, SendMessage, SendMsgOptions, Status,
 };
 
 mod server;
@@ -28,11 +28,11 @@ impl<'a, C, Res, ReqMsgView> UnaryCallBuilder<'a, C, Res, ReqMsgView>
 where
     C: CallOnce,
 {
-    pub fn new(channel: C, method: String, req: ReqMsgView) -> Self {
+    pub fn new(channel: C, method: impl ToString, req: ReqMsgView) -> Self {
         Self {
             channel,
             req,
-            method,
+            method: method.to_string(),
             args: Default::default(),
             _phantom: PhantomData,
         }
@@ -63,10 +63,18 @@ where
         Res: Message,
         for<'b> Res::Mut<'b>: ClearAndParse + Send + Sync,
     {
-        let (tx, rx) = self.channel.call_once(self.method, self.args);
+        let (mut tx, rx) = self.channel.call_once(self.method, self.args);
         let mut rx = RecvStreamValidator::new(rx, true);
         let req = &ProtoSendMessage::from_view(&self.req);
-        tx.send_and_close(req).await;
+        let _ = tx
+            .send_msg(
+                req,
+                SendMsgOptions {
+                    final_msg: true,
+                    ..Default::default()
+                },
+            )
+            .await;
         let mut res = ProtoRecvMessage::from_mut(res);
         loop {
             let i = rx.next(&mut res).await;
@@ -107,17 +115,17 @@ where
     }
 }
 
-pub struct GrpcStreamingResponse<M, Rx, Res> {
+pub struct GrpcStreamingResponse<M, Rx> {
     rx: RecvStreamValidator<Rx>,
     status: Option<Status>,
-    _phantom: PhantomData<(M, Res)>,
+    _phantom: PhantomData<M>,
 }
 
-impl<M, Rx, Res> GrpcStreamingResponse<M, Rx, Res>
+impl<M, Rx> GrpcStreamingResponse<M, Rx>
 where
     Rx: ClientRecvStream,
-    Res: Message,
-    for<'b> Res::Mut<'b>: MessageMut<'b>,
+    M: Message,
+    for<'b> M::Mut<'b>: MessageMut<'b>,
 {
     fn new(rx: RecvStreamValidator<Rx>) -> Self {
         Self {
@@ -127,8 +135,8 @@ where
         }
     }
 
-    pub async fn next(&mut self) -> Option<Res> {
-        let mut res = Res::default();
+    pub async fn next(&mut self) -> Option<M> {
+        let mut res = M::default();
         let mut res_view = ProtoRecvMessage::from_mut(&mut res);
         loop {
             let i = self.rx.next(&mut res_view).await;
@@ -178,10 +186,10 @@ pub struct BidiCallBuilder<C, Req, Res> {
 }
 
 impl<C, Req, Res> BidiCallBuilder<C, Req, Res> {
-    pub fn new(channel: C, method: String) -> Self {
+    pub fn new(channel: C, method: impl ToString) -> Self {
         Self {
             channel,
-            method,
+            method: method.to_string(),
             args: Default::default(),
             _phantom: PhantomData,
         }
@@ -201,12 +209,16 @@ where
         self,
     ) -> (
         impl Sink<Req, Error = ()>,
-        GrpcStreamingResponse<Res, impl ClientRecvStream, Res>,
+        GrpcStreamingResponse<Res, impl ClientRecvStream>,
     ) {
         let (tx, rx) = self.channel.call_once(self.method, self.args);
         let rx = RecvStreamValidator::new(rx, false);
         let req_sink = unfold(tx, |mut tx, req| async move {
-            tx.send_msg(&ProtoSendMessage::from_view(&req)).await?;
+            tx.send_msg(
+                &ProtoSendMessage::from_view(&req),
+                SendMsgOptions::default(),
+            )
+            .await?;
             Ok(tx)
         });
         let res_stream = GrpcStreamingResponse::new(rx);

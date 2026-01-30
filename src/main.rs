@@ -105,6 +105,17 @@ use std::pin::pin;
 async fn bidi(client: &MyServiceClientStub<impl Call>) {
     {
         let (tx, mut rx) = client.streaming_call().start();
+        // Perform sends and receives concurrently.
+        //
+        // Note that the danger in doing it serially:
+        //
+        // tx.send().await;
+        // tx.send().await; ... x 100
+        // rx.next().await; ...
+        //
+        // is that the send stream could become blocked.  If the server is
+        // also attempting to send a hundred responses before reading the
+        // first request, that would result in a deadlock.
         let requests = async move {
             let mut tx = pin!(tx);
             if tx.send(proto!(MyRequest { query: 10 })).await.is_err() {
@@ -118,17 +129,6 @@ async fn bidi(client: &MyServiceClientStub<impl Call>) {
             }
             println!("stream status: {:?}", rx.status().await);
         };
-        // Perform sends and receives concurrently.
-        //
-        // Note that the danger in doing it serially:
-        //
-        // tx.send().await;
-        // tx.send().await; ... x 100
-        // rx.next().await; ...
-        //
-        // is that the send stream could become blocked.  If the server is
-        // also attempting to send a hundred responses before reading the
-        // first request, that would result in a deadlock.
         tokio::join!(requests, responses);
     }
     println!();
@@ -253,23 +253,16 @@ mod interceptor {
         delegate: Delegate,
     }
 
-    impl<Delegate: ClientSendStream> PrintReqSendStreamInterceptor<Delegate> {
-        fn send_common(&self, msg: &dyn SendMessage) {
+    impl<Delegate: ClientSendStream> ClientSendStream for PrintReqSendStreamInterceptor<Delegate> {
+        async fn send_msg(
+            &mut self,
+            msg: &dyn SendMessage,
+            opts: SendMsgOptions,
+        ) -> Result<(), ()> {
             if let Some(req) = msg.downcast_ref::<ProtoSendMessage<MyRequest>>() {
                 println!("Saw request query value: {}", req.query());
             }
-        }
-    }
-
-    impl<Delegate: ClientSendStream> ClientSendStream for PrintReqSendStreamInterceptor<Delegate> {
-        async fn send_msg(&mut self, msg: &dyn SendMessage) -> Result<(), ()> {
-            self.send_common(msg);
-            self.delegate.send_msg(msg).await
-        }
-
-        async fn send_and_close(self, msg: &dyn SendMessage) {
-            self.send_common(msg);
-            self.delegate.send_and_close(msg).await
+            self.delegate.send_msg(msg, opts).await
         }
     }
 }

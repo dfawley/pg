@@ -31,7 +31,7 @@ impl Call for Channel {
             let _ = tx2.blocking_send(ResponseStreamItem::Trailers(Trailers {
                 status: Status {
                     code: 13,
-                    _msg: "method not registered on server".to_string(),
+                    msg: "method not registered on server".to_string(),
                 },
             }));
         }
@@ -49,12 +49,9 @@ pub struct ChannelSendStream {
 }
 
 impl ClientSendStream for ChannelSendStream {
-    async fn send_msg(&mut self, msg: &dyn SendMessage) -> Result<(), ()> {
+    async fn send_msg(&mut self, msg: &dyn SendMessage, _opts: SendMsgOptions) -> Result<(), ()> {
         let _ = self.tx.send(msg.encode().pop().unwrap()).await;
         Ok(())
-    }
-    async fn send_and_close(mut self, msg: &dyn SendMessage) {
-        let _ = self.send_msg(msg).await;
     }
 }
 
